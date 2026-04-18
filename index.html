@@ -1,0 +1,249 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Cuemath Tutor Interview</title>
+
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap"
+      rel="stylesheet"
+    />
+
+    <link rel="stylesheet" href="/style.css" />
+  </head>
+  <body>
+    <header class="app-header">
+      <div class="brand">
+        <div class="brand-mark" aria-hidden="true"></div>
+        <div class="brand-text">Cuemath</div>
+      </div>
+      <div id="header-right" class="header-right">
+        <div id="estimated-remaining" class="estimated-remaining" aria-live="polite"></div>
+      </div>
+    </header>
+
+    <main class="container">
+      <!-- PAGE 1: WELCOME -->
+      <section id="screen-welcome" class="screen is-active">
+        <div class="hero-card">
+          <h1 class="hero-title">Welcome to the Cuemath Tutor Interview</h1>
+          <p class="hero-subtitle">
+            This is a short voice conversation — just like a real interview call. Speak naturally,
+            take your time. We are looking forward to meeting you!
+          </p>
+
+          <div class="form-grid">
+            <label class="field">
+              <span class="field-label">Your full name</span>
+              <input id="full-name" type="text" autocomplete="name" placeholder="e.g., XYZ" />
+            </label>
+
+            <label class="field">
+              <span class="field-label">Your email address</span>
+              <input id="email" type="email" autocomplete="email" placeholder="e.g., xyz@example.com" />
+            </label>
+          </div>
+
+          <div class="checklist" aria-label="Before you start">
+            <div class="check-item">
+              <span class="check-icon" aria-hidden="true">✓</span>
+              <span>Make sure you are in a quiet place</span>
+            </div>
+            <div class="check-item">
+              <span class="check-icon" aria-hidden="true">✓</span>
+              <span>Allow microphone access when asked</span>
+            </div>
+            <div class="check-item">
+              <span class="check-icon" aria-hidden="true">✓</span>
+              <span>Speak clearly and naturally</span>
+            </div>
+            <div class="check-item">
+              <span class="check-icon" aria-hidden="true">✓</span>
+              <span>The interview takes about 5-7 minutes</span>
+            </div>
+          </div>
+
+          <button id="start-btn" class="btn btn-primary" type="button" disabled>
+            Start Interview
+          </button>
+
+          <p id="welcome-error" class="error-text" role="alert"></p>
+        </div>
+      </section>
+
+      <!-- PAGE 1.5: INTERVIEW WARNING -->
+      <section id="screen-policy" class="screen">
+        <div class="hero-card policy-card">
+          <h2 class="hero-title">Important Interview Rule</h2>
+          <p class="hero-subtitle">
+            This interview must be completed in one continuous session. If you switch tabs,
+            minimize the window, or leave this screen, your interview will be auto-submitted and
+            marked as <strong>Not Recommended</strong>.
+          </p>
+
+          <div class="checklist">
+            <div class="check-item">
+              <span class="check-icon" aria-hidden="true">!</span>
+              <span>Stay on this interview window at all times</span>
+            </div>
+            <div class="check-item">
+              <span class="check-icon" aria-hidden="true">!</span>
+              <span>Do not switch tabs or applications during the interview</span>
+            </div>
+            <div class="check-item">
+              <span class="check-icon" aria-hidden="true">!</span>
+              <span>Click OK only when you are ready to continue without interruption</span>
+            </div>
+          </div>
+
+          <button id="policy-ok-btn" class="btn btn-primary" type="button">OK, I Understand</button>
+        </div>
+      </section>
+
+      <!-- PAGE 2: INTERVIEW -->
+      <section id="screen-interview" class="screen">
+        <div class="progress-wrap">
+          <div class="progress-row">
+            <div id="progress-bar" class="progress-bar" role="progressbar" aria-valuemin="0" aria-valuemax="100">
+              <div id="progress-fill" class="progress-fill"></div>
+            </div>
+            <div id="progress-percent" class="progress-percent" aria-live="polite">0%</div>
+            <div id="question-time-remaining" class="question-time-remaining" aria-live="polite">Time left: 1:00</div>
+          </div>
+
+          <div class="steps-row" id="step-indicators" aria-label="Interview steps">
+            <div class="step-indicator" data-step="intro">Intro</div>
+            <div class="step-indicator" data-step="q1">Q1</div>
+            <div class="step-indicator" data-step="q2">Q2</div>
+            <div class="step-indicator" data-step="q3">Q3</div>
+            <div class="step-indicator" data-step="q4">Q4</div>
+            <div class="step-indicator" data-step="q5">Q5</div>
+            <div class="step-indicator" data-step="results">Results</div>
+          </div>
+        </div>
+
+        <div id="interview-card" class="interview-card">
+          <div class="question-top">
+            <div id="question-badge" class="question-badge">Interview Question</div>
+          </div>
+          <h2 id="question-text" class="question-text"></h2>
+
+          <div id="waveform" class="waveform" aria-hidden="true">
+            <div class="wave-bar"></div>
+            <div class="wave-bar"></div>
+            <div class="wave-bar"></div>
+            <div class="wave-bar"></div>
+            <div class="wave-bar"></div>
+          </div>
+
+          <div class="mic-row">
+            <button id="mic-btn" class="mic-btn" type="button" aria-label="Start recording">
+              <span class="mic-icon" aria-hidden="true"></span>
+            </button>
+          </div>
+          <div id="record-instruction" class="instruction">Click mic to answer</div>
+          <p id="mic-helper-text" class="mic-helper-text"></p>
+
+          <div class="transcript-wrap">
+            <label class="field">
+              <span class="field-label">Your answer (live transcript)</span>
+              <textarea id="transcript" rows="5" placeholder="Your speech will appear here..." spellcheck="false" readonly></textarea>
+            </label>
+          </div>
+
+          <div class="action-row">
+            <button id="re-record-btn" class="btn btn-secondary" type="button" disabled>
+              Re-record
+            </button>
+
+            <button id="submit-answer-btn" class="btn btn-primary" type="button" disabled>
+              Submit Answer
+            </button>
+          </div>
+
+          <p id="interview-error" class="error-text" role="alert"></p>
+          <div id="processing-overlay" class="overlay is-hidden" aria-live="polite">
+            <div class="spinner" aria-hidden="true"></div>
+            <div id="processing-text" class="processing-text">Processing...</div>
+          </div>
+        </div>
+      </section>
+
+      <!-- PAGE 3: RESULTS -->
+      <section id="screen-results" class="screen">
+        <div class="results-card">
+          <div id="results-loading" class="results-loading">
+            <h2 class="results-title">Preparing your report...</h2>
+            <div class="loading-message" id="loading-message"></div>
+            <div class="spinner spinner-large" aria-hidden="true"></div>
+          </div>
+
+          <div id="results-content" class="results-content is-hidden">
+            <div class="results-head">
+              <div>
+                <div class="results-meta">
+                  <div><span class="meta-label">Candidate:</span> <span id="r-name"></span></div>
+                  <div><span class="meta-label">Email:</span> <span id="r-email"></span></div>
+                  <div><span class="meta-label">Date:</span> <span id="r-date"></span></div>
+                  <div><span class="meta-label">Time:</span> <span id="r-time"></span></div>
+                </div>
+              </div>
+
+              <div class="overall-score-wrap">
+                <div class="donut">
+                  <svg width="160" height="160" viewBox="0 0 160 160" aria-label="Overall score">
+                    <circle cx="80" cy="80" r="62" stroke="#E9E9F3" stroke-width="14" fill="none" />
+                    <circle id="donut-fg" cx="80" cy="80" r="62" stroke="#FF6B00" stroke-width="14" fill="none"
+                      stroke-linecap="round"
+                      transform="rotate(-90 80 80)"
+                    />
+                    <text id="donut-text" x="80" y="92" text-anchor="middle" font-size="26" font-weight="700" fill="#1A1A2E"></text>
+                  </svg>
+                </div>
+                <div id="overall-decision-badge" class="decision-badge"></div>
+              </div>
+            </div>
+
+            <div class="results-grid">
+              <p id="overall-summary" class="summary-text is-hidden" aria-hidden="true"></p>
+
+              <div class="bars-col" id="dimension-list">
+                <!-- Filled by JS -->
+              </div>
+
+              <div class="strengths-grid">
+                <div class="strength-box strength-green">
+                  <h3 class="box-title">Key Strengths</h3>
+                  <ul id="key-strengths" class="bullets"></ul>
+                </div>
+                <div class="strength-box strength-orange">
+                  <h3 class="box-title">Areas for Improvement</h3>
+                  <ul id="areas-for-improvement" class="bullets"></ul>
+                </div>
+              </div>
+            </div>
+
+            <div id="results-actions" class="results-actions">
+              <button id="print-btn" class="btn btn-secondary" type="button">Print / Download Report (PDF)</button>
+              <button id="new-interview-btn" class="btn btn-primary" type="button">Start New Interview</button>
+            </div>
+          </div>
+
+          <p id="results-error" class="error-text" role="alert"></p>
+        </div>
+      </section>
+    </main>
+
+    <footer class="footer">
+      <span class="footer-brand">Cuemath Tutor Screener</span>
+      <span class="footer-sep" aria-hidden="true">•</span>
+      <span class="footer-note">AI Voice Interview Experience</span>
+    </footer>
+
+    <script defer src="/app.js"></script>
+  </body>
+</html>
+

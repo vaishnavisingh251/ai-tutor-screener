@@ -1,0 +1,610 @@
+require('dotenv').config();
+
+const express = require('express');
+const cors = require('cors');
+const path = require('path');
+
+const app = express();
+
+app.use(cors());
+app.use(express.json({ limit: '1mb' }));
+
+const PORT = process.env.PORT || 3000;
+const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
+const GEMINI_API_VERSION = process.env.GEMINI_API_VERSION || 'v1beta';
+const GEMINI_MODEL = process.env.GEMINI_MODEL || '';
+
+const DEFAULT_GEMINI_MODELS = [
+  'gemini-2.0-flash',
+  'gemini-1.5-flash-latest',
+  'gemini-1.5-flash'
+];
+
+function isGeminiQuotaError(err) {
+  if (!err) return false;
+  return err.code === 'RESOURCE_EXHAUSTED' || /quota|resource_exhausted/i.test(String(err.message || ''));
+}
+
+function extractFirstJsonObject(text) {
+  if (!text) return null;
+
+  // Strip common code-fence wrappers if the model ever includes them.
+  const cleaned = String(text)
+    .replace(/```json/gi, '```')
+    .replace(/```/g, '')
+    .trim();
+
+  // Find the first JSON object by locating outer braces.
+  const start = cleaned.indexOf('{');
+  const end = cleaned.lastIndexOf('}');
+  if (start === -1 || end === -1 || end <= start) return null;
+
+  const candidate = cleaned.slice(start, end + 1);
+  return candidate;
+}
+
+async function callGemini({ systemPrompt, userPrompt }) {
+  if (!GEMINI_API_KEY || GEMINI_API_KEY === 'placeholder') {
+    throw new Error(
+      'GEMINI_API_KEY is missing. Add it to your .env file and restart the server.'
+    );
+  }
+
+  const payload = {
+    contents: [
+      {
+        role: 'user',
+        parts: [
+          { text: systemPrompt + '\n\n' + userPrompt }
+        ]
+      }
+    ],
+    generationConfig: {
+      temperature: 0.7,
+      topP: 0.9
+    }
+  };
+
+  const modelsToTry = GEMINI_MODEL
+    ? [GEMINI_MODEL]
+    : DEFAULT_GEMINI_MODELS;
+
+  let lastError = null;
+
+  for (const modelName of modelsToTry) {
+    const url =
+      `https://generativelanguage.googleapis.com/${GEMINI_API_VERSION}/models/${encodeURIComponent(modelName)}:generateContent?key=` +
+      encodeURIComponent(GEMINI_API_KEY);
+
+    const resp = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+
+    const data = await resp.json().catch(() => null);
+    if (resp.ok) {
+      const text = data?.candidates?.[0]?.content?.parts?.[0]?.text;
+      if (text) return text;
+      lastError = new Error(`Gemini response was empty for model "${modelName}".`);
+      continue;
+    }
+
+    const statusCode = data?.error?.code || resp.status;
+    const statusText = data?.error?.status || '';
+    const errorMessage = data?.error?.message || `HTTP ${resp.status}`;
+    const geminiError = new Error(`Gemini request failed for "${modelName}": ${errorMessage}`);
+    geminiError.code = statusText || String(statusCode);
+    geminiError.status = statusCode;
+
+    if (statusCode === 429 || statusText === 'RESOURCE_EXHAUSTED') {
+      console.warn(`Gemini quota/rate limit for model "${modelName}".`);
+      throw geminiError;
+    }
+
+    console.error(`Gemini error response for model "${modelName}":`, data);
+    const isModelNotFound = statusCode === 404;
+    if (isModelNotFound) {
+      lastError = new Error(`Model "${modelName}" was not found.`);
+      continue;
+    }
+
+    throw geminiError;
+  }
+
+  throw lastError || new Error('Gemini API request failed for all configured models.');
+}
+
+function wordCount(text) {
+  const t = String(text || '').trim();
+  if (!t) return 0;
+  return t.split(/\s+/).filter(Boolean).length;
+}
+
+function tokenize(text) {
+  return String(text || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .split(/\s+/)
+    .filter(Boolean);
+}
+
+function buildKeywordSet(question) {
+  const STOP = new Set([
+    'a', 'an', 'the', 'is', 'are', 'was', 'were', 'be', 'been', 'being', 'to', 'for', 'of', 'in',
+    'on', 'at', 'by', 'with', 'and', 'or', 'but', 'if', 'then', 'than', 'that', 'this', 'it',
+    'as', 'from', 'into', 'about', 'you', 'your', 'i', 'me', 'my', 'we', 'our', 'they', 'their',
+    'what', 'how', 'when', 'where', 'why', 'who', 'would', 'could', 'should', 'can', 'will',
+    'do', 'does', 'did', 'have', 'has', 'had', 'just', 'tell', 'start', 'little'
+  ]);
+  return new Set(tokenize(question).filter((w) => w.length > 2 && !STOP.has(w)));
+}
+
+function overlapRatio(question, answer) {
+  const qKeywords = buildKeywordSet(question);
+  if (!qKeywords.size) return 1;
+  const answerWords = new Set(tokenize(answer));
+  let hits = 0;
+  for (const w of qKeywords) {
+    if (answerWords.has(w)) hits += 1;
+  }
+  return hits / qKeywords.size;
+}
+
+function looksLikeLongTangent(question, answer) {
+  const wc = wordCount(answer);
+  if (wc < 120) return false;
+  return overlapRatio(question, answer) < 0.16;
+}
+
+function followUpFromQuestion(question) {
+  const q = String(question || '').toLowerCase();
+
+  if (q.includes('fraction')) {
+    return 'Nice start. Explain fractions with one simple example and clear steps.';
+  }
+
+  if (q.includes('staring at the same problem') || q.includes('walk me through') || q.includes('exactly what you would do')) {
+    return 'Good. Give one real moment and what you would say first, then next.';
+  }
+
+  if (q.includes('keep a child engaged') || q.includes('losing interest') || q.includes('distracted')) {
+    return 'Share one case where a child lost focus and the exact steps you used.';
+  }
+
+  if (q.includes('time you explained') || q.includes('simple way')) {
+    return 'Give one real example: what was hard and what exact words you used.';
+  }
+
+  if (q.includes('tell me a little about yourself')) {
+    return 'Thanks. Share one experience that clearly shows why you enjoy teaching.';
+  }
+
+  return 'Could you make this more concrete with one real example and clear steps?';
+}
+
+function followUpFromContext(coreQuestion, lastAnswer, depth = 1) {
+  const q = String(coreQuestion || '').toLowerCase();
+  const a = String(lastAnswer || '').toLowerCase();
+  const d = Math.max(1, Number(depth || 1));
+
+  if (q.includes('fraction')) {
+    if (d === 1) return 'In one line, how would you explain fractions to a 9-year-old?';
+    if (d === 2) return 'Now give one real example and the words you would use.';
+    return 'If the child is still confused, what would you say next?';
+  }
+
+  if (q.includes('staring at the same problem') || q.includes('walk me through') || q.includes('exactly what you would do')) {
+    if (d === 1) return 'What is your first sentence to calm the student?';
+    if (d === 2) return 'After that, what are your next two steps?';
+    return 'How would you check real understanding, not just a yes?';
+  }
+
+  if (q.includes('keep a child engaged') || q.includes('losing interest') || q.includes('distracted')) {
+    if (d === 1) return 'What do you do in the first 30 seconds to regain attention?';
+    if (d === 2) return 'Give one activity or tactic you would use right away.';
+    return 'If that fails, what is your backup plan?';
+  }
+
+  if (q.includes('time you explained') || q.includes('simple way')) {
+    if (d === 1) return 'What exact words did you use?';
+    if (d === 2) return 'How did you confirm they truly understood?';
+    return 'What would you do even better next time?';
+  }
+
+  if (q.includes('tell me a little about yourself')) {
+    if (d === 1) return 'What one experience shaped your motivation to teach?';
+    if (d === 2) return 'What did that teach you about how children learn?';
+    return 'How does that shape your teaching today?';
+  }
+
+  if (/example|real|specific|step|student|child/.test(a)) {
+    if (d === 1) return 'Good. How would you make that even simpler for a child?';
+    return 'Add one short real-life example to support that.';
+  }
+
+  if (d === 1) return 'Can you explain that with one real teaching example?';
+  if (d === 2) return 'What exact words would you use with the student?';
+  return 'How would you adapt if the student still struggled?';
+}
+
+function stripToText(v) {
+  return String(v || '').trim();
+}
+
+function collectAllAnswerText(responses) {
+  if (!Array.isArray(responses)) return '';
+  return responses
+    .map((r) => {
+      const followupArrayText = Array.isArray(r?.followups)
+        ? r.followups.map((f) => stripToText(f?.answer)).filter(Boolean).join(' ')
+        : '';
+      return [stripToText(r?.answer), followupArrayText, stripToText(r?.followup_answer)]
+        .filter(Boolean)
+        .join(' ');
+    })
+    .join(' ')
+    .trim();
+}
+
+function sentenceCount(text) {
+  const matches = String(text || '').match(/[.!?]+/g);
+  return matches ? matches.length : 0;
+}
+
+function clampScore(v) {
+  const n = Number(v);
+  if (!Number.isFinite(n)) return 1;
+  return Math.max(1, Math.min(10, Math.round(n)));
+}
+
+function pickEvidenceQuote(responses) {
+  if (!Array.isArray(responses)) return '';
+  for (const r of responses) {
+    const answers = [];
+    if (Array.isArray(r?.followups)) {
+      for (const f of r.followups) answers.push(stripToText(f?.answer));
+    }
+    answers.push(stripToText(r?.followup_answer));
+    answers.push(stripToText(r?.answer));
+    for (const answer of answers) {
+      if (!answer) continue;
+      const quote = answer.split(/\s+/).slice(0, 12).join(' ').trim();
+      if (quote) return quote;
+    }
+  }
+  return '';
+}
+
+function buildDimension(score, label, quote) {
+  const safeQuote = quote || 'No strong quote captured from response.';
+  return {
+    score,
+    comment: `${label} appears around ${score}/10 from the provided responses.\nThis estimate is based on the observed interview evidence.`,
+    quote: safeQuote
+  };
+}
+
+function sanitizeFeedbackLine(text) {
+  return String(text || '')
+    .replace(/re-?evaluate with active gemini quota for a more reliable final decision\.?/gi, '')
+    .replace(/ai evaluation was temporarily unavailable\.?/gi, '')
+    .replace(/fallback score is estimated because[^.]*\.?/gi, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function sanitizeEvaluationPayload(payload) {
+  const out = payload && typeof payload === 'object' ? { ...payload } : {};
+  const dimensionKeys = [
+    'communication_clarity',
+    'warmth_empathy',
+    'patience',
+    'ability_to_simplify',
+    'english_fluency'
+  ];
+
+  for (const key of dimensionKeys) {
+    const dim = out[key];
+    if (!dim || typeof dim !== 'object') continue;
+    out[key] = {
+      ...dim,
+      comment: sanitizeFeedbackLine(dim.comment)
+    };
+  }
+
+  out.key_strengths = Array.isArray(out.key_strengths)
+    ? out.key_strengths.map(sanitizeFeedbackLine).filter(Boolean)
+    : [];
+  out.areas_for_improvement = Array.isArray(out.areas_for_improvement)
+    ? out.areas_for_improvement.map(sanitizeFeedbackLine).filter(Boolean)
+    : [];
+  if (typeof out.overall_summary === 'string') {
+    out.overall_summary = sanitizeFeedbackLine(out.overall_summary);
+  }
+
+  return out;
+}
+
+function buildFallbackEvaluation(responses) {
+  const allText = collectAllAnswerText(responses);
+  const wc = wordCount(allText);
+  const sentences = sentenceCount(allText);
+  const evidenceQuote = pickEvidenceQuote(responses);
+
+  // Basic heuristic scoring so UI can render a meaningful report while Gemini is unavailable.
+  const base = clampScore(3 + Math.floor(wc / 45));
+  const clarity = clampScore(base + (sentences >= 8 ? 1 : 0));
+  const warmth = clampScore(base + (/student|child|help|encourage|support|patient/i.test(allText) ? 1 : 0));
+  const patience = clampScore(base + (/calm|step|slow|again|listen|patience/i.test(allText) ? 1 : 0));
+  const simplify = clampScore(base + (/example|simple|story|real|pizza|slice/i.test(allText) ? 1 : 0));
+  const fluency = clampScore(base + (wc >= 120 ? 1 : 0));
+
+  const overall = clampScore((clarity + warmth + patience + simplify + fluency) / 5);
+  const decision = overall >= 7 ? 'Move to Next Round' : 'Not Recommended';
+  const strengths = [];
+  const improvements = [];
+
+  if (clarity >= 7) strengths.push('Explains ideas with reasonable structure and understandable flow.')
+  if (warmth >= 7) strengths.push('Shows learner-focused language and supportive tone in responses.')
+  if (simplify >= 7) strengths.push('Uses concrete examples to simplify abstract ideas for children.')
+  if (fluency >= 7) strengths.push('Speaks with enough detail and continuity to communicate confidently.')
+  if (strengths.length === 0) strengths.push('Attempted all questions and provided spoken responses for evaluation.')
+
+  if (clarity < 6) improvements.push('Give tighter, step-by-step answers instead of broad statements.')
+  if (simplify < 6) improvements.push('Add child-friendly real-life examples (pizza, sharing, objects) while explaining concepts.')
+  if (patience < 6) improvements.push('Describe exactly how you would support a confused student before reteaching.')
+  if (fluency < 6) improvements.push('Use shorter, clearer sentences and avoid fragmented responses.')
+  if (improvements.length === 0) improvements.push('Add slightly more specific classroom examples to strengthen evidence.')
+
+  return {
+    communication_clarity: buildDimension(clarity, 'Communication clarity', evidenceQuote),
+    warmth_empathy: buildDimension(warmth, 'Warmth and empathy', evidenceQuote),
+    patience: buildDimension(patience, 'Patience', evidenceQuote),
+    ability_to_simplify: buildDimension(simplify, 'Ability to simplify', evidenceQuote),
+    english_fluency: buildDimension(fluency, 'English fluency', evidenceQuote),
+    overall_score: overall,
+    overall_decision: decision,
+    overall_summary: '',
+    key_strengths: strengths.slice(0, 3),
+    areas_for_improvement: improvements.slice(0, 3)
+  };
+}
+
+app.post('/check-answer', async (req, res) => {
+  try {
+    const {
+      question,
+      answer,
+      coreQuestion,
+      followUpCount = 0,
+      minFollowUps = 2,
+      maxFollowUps = 3
+    } = req.body || {};
+    const answerText = String(answer || '').trim();
+    const questionText = String(question || '').trim();
+    const coreQuestionText = String(coreQuestion || question || '').trim();
+    const depth = Math.max(0, Number(followUpCount || 0));
+    const minDepth = Math.max(0, Number(minFollowUps || 0));
+    const maxDepth = Math.max(minDepth, Number(maxFollowUps || 3));
+
+    const wc = wordCount(answerText);
+    const isTangent = looksLikeLongTangent(questionText, answerText);
+
+    if (depth >= maxDepth) {
+      return res.json({
+        isVague: false,
+        shouldAskFollowUp: false,
+        reason: 'max_followups_reached',
+        followUpQuestion: ''
+      });
+    }
+
+    // Hard rule: very short answers should trigger follow-up.
+    if (wc < 15) {
+      return res.json({
+        isVague: true,
+        shouldAskFollowUp: true,
+        reason: 'too_short',
+        followUpQuestion: followUpFromContext(coreQuestionText, answerText, depth + 1)
+      });
+    }
+
+    // Long but off-track response should be redirected.
+    if (isTangent) {
+      return res.json({
+        isVague: true,
+        shouldAskFollowUp: true,
+        reason: 'off_topic_tangent',
+        followUpQuestion:
+          'Thank you. Could you answer this more directly in 2-4 clear steps focused only on this exact situation?'
+      });
+    }
+
+    const systemPrompt =
+      'You are a careful interview coach for Cuemath tutor screening. ' +
+      'Decide if the interviewer should ask another follow-up question now. ' +
+      'Conversation must feel natural and human, not robotic. ' +
+      'Return ONLY clean JSON with keys: isVague (boolean), shouldAskFollowUp (boolean), followUpQuestion (string). ' +
+      'If shouldAskFollowUp is false, followUpQuestion must be empty.';
+
+    const userPrompt =
+      `Core question:\n${coreQuestionText}\n\n` +
+      `Current asked question:\n${questionText}\n\n` +
+      `Candidate answer:\n${answerText}\n\n` +
+      `Current follow-up depth: ${depth}\n` +
+      `Minimum follow-ups desired: ${minDepth}\n` +
+      `Maximum follow-ups allowed: ${maxDepth}\n\n` +
+      'Rules:\n' +
+      '- If depth is below minimum, prefer asking another follow-up unless the answer is already excellent.\n' +
+      '- Never exceed maximum follow-ups.\n' +
+      '- Follow-up should be short, simple English, and conversational.\n' +
+      '- Keep follow-up question under 18 words.\n' +
+      '- Ask for real examples, exact wording, or clear steps when helpful.\n\n' +
+      'Return JSON only.';
+
+    try {
+      const geminiText = await callGemini({ systemPrompt, userPrompt });
+      const jsonCandidate = extractFirstJsonObject(geminiText);
+      if (!jsonCandidate) {
+        return res.json({
+          isVague: true,
+          shouldAskFollowUp: true,
+          reason: 'fallback_followup',
+          followUpQuestion: followUpFromContext(coreQuestionText, answerText, depth + 1)
+        });
+      }
+
+      const parsed = JSON.parse(jsonCandidate);
+      const isVague = Boolean(parsed?.isVague);
+      let shouldAskFollowUp = Boolean(parsed?.shouldAskFollowUp);
+      const followUpQuestion = String(parsed?.followUpQuestion || '').trim();
+
+      if (depth < minDepth) shouldAskFollowUp = true;
+      if (depth >= maxDepth) shouldAskFollowUp = false;
+
+      if (shouldAskFollowUp && !followUpQuestion) {
+        return res.json({
+          isVague: true,
+          shouldAskFollowUp: true,
+          reason: 'fallback_followup',
+          followUpQuestion: followUpFromContext(coreQuestionText, answerText, depth + 1)
+        });
+      }
+
+      return res.json({
+        isVague,
+        shouldAskFollowUp,
+        reason: isVague ? 'model_flagged_vague' : 'clear',
+        followUpQuestion: shouldAskFollowUp ? followUpQuestion : ''
+      });
+    } catch (geminiErr) {
+      if (isGeminiQuotaError(geminiErr)) {
+        console.warn('Gemini check-answer fallback: quota exhausted, using local follow-up.');
+      } else {
+        console.error('Gemini check-answer fallback triggered:', geminiErr);
+      }
+      return res.json({
+        isVague: true,
+        shouldAskFollowUp: depth < maxDepth,
+        reason: 'fallback_followup',
+        followUpQuestion: depth < maxDepth
+          ? followUpFromContext(coreQuestionText, answerText, depth + 1)
+          : ''
+      });
+    }
+  } catch (err) {
+    console.error('POST /check-answer failed:', err);
+    return res.status(500).json({
+      error: 'Unable to analyze the answer. Please try again.'
+    });
+  }
+});
+
+app.post('/evaluate', async (req, res) => {
+  try {
+    const { name, email, responses, timestamp } = req.body || {};
+    const candidateName = String(name || '').trim();
+    const candidateEmail = String(email || '').trim();
+    const candidateResponses = Array.isArray(responses) ? responses : [];
+    const ts = timestamp ? String(timestamp) : new Date().toISOString();
+
+    if (!candidateName || !candidateEmail) {
+      return res.status(400).json({ error: 'Missing candidate name or email.' });
+    }
+
+    const systemPrompt =
+      'You are an expert hiring evaluator for Cuemath, a leading math edtech company. ' +
+      'Evaluate this tutor candidate based purely on their voice interview answers. ' +
+      'This is NOT about math knowledge — evaluate ONLY soft skills. ' +
+      'Be honest and do not give everyone high scores. ' +
+      'Be fair: account for minor transcription errors from spoken answers, but still score clarity and fluency rigorously.';
+
+    const userPrompt =
+      `Candidate:\nName: ${candidateName}\nEmail: ${candidateEmail}\nTimestamp: ${ts}\n\n` +
+      'Conversation answers (questions with answers and optional follow-ups):\n' +
+      JSON.stringify(candidateResponses, null, 2) +
+      '\n\n' +
+      'Now follow these instructions:\n' +
+      'Score each dimension from 1-10 with:\n' +
+      '- a score (number)\n' +
+      '- a 2-line honest comment (use "\\n" between the two lines)\n' +
+      '- one specific quote from their actual answer as evidence (quote exactly a short phrase)\n\n' +
+      'Important scoring guidance:\n' +
+      '- Reward structured, student-centered, step-by-step tutoring responses.\n' +
+      '- Penalize generic, vague, or off-topic responses.\n' +
+      '- If a response is too short, mention lack of evidence in comments.\n' +
+      '- Keep tone professional and fair.\n' +
+      '- Do NOT use generic AI phrases like "shows potential" or "needs improvement overall" without evidence.\n' +
+      '- In strengths and improvements, refer to observed behavior from answers, not template wording.\n\n' +
+      'Dimensions:\n' +
+      '1) Communication Clarity\n' +
+      '2) Warmth & Empathy\n' +
+      '3) Patience\n' +
+      '4) Ability to Simplify\n' +
+      '5) English Fluency\n\n' +
+      'Also provide:\n' +
+      '- Overall Score (average, out of 10)\n' +
+      '- Overall Decision: "Move to Next Round" or "Not Recommended"\n' +
+      '- Overall summary can be empty string\n' +
+      '- 2-3 key strengths (array of strings)\n' +
+      '- 2-3 areas for improvement (array of strings)\n\n' +
+      'Return ONLY clean JSON, no markdown, no explanation.\n' +
+      'Use this exact JSON structure:\n' +
+      '{\n' +
+      '  \"communication_clarity\": {\"score\": number, \"comment\": string, \"quote\": string},\n' +
+      '  \"warmth_empathy\": {\"score\": number, \"comment\": string, \"quote\": string},\n' +
+      '  \"patience\": {\"score\": number, \"comment\": string, \"quote\": string},\n' +
+      '  \"ability_to_simplify\": {\"score\": number, \"comment\": string, \"quote\": string},\n' +
+      '  \"english_fluency\": {\"score\": number, \"comment\": string, \"quote\": string},\n' +
+      '  \"overall_score\": number,\n' +
+      '  \"overall_decision\": \"Move to Next Round\" | \"Not Recommended\",\n' +
+      '  \"overall_summary\": string,\n' +
+      '  \"key_strengths\": [string, ...],\n' +
+      '  \"areas_for_improvement\": [string, ...]\n' +
+      '}';
+
+    try {
+      const geminiText = await callGemini({ systemPrompt, userPrompt });
+      const jsonCandidate = extractFirstJsonObject(geminiText);
+      if (!jsonCandidate) {
+        console.error('Could not extract JSON from Gemini response:', geminiText);
+        return res.status(502).json({ error: 'Evaluation failed. Please try again.' });
+      }
+
+      const parsed = JSON.parse(jsonCandidate);
+      return res.json(sanitizeEvaluationPayload(parsed));
+    } catch (geminiErr) {
+      if (isGeminiQuotaError(geminiErr)) {
+        console.warn('Gemini evaluate fallback: quota exhausted, using local scoring.');
+        return res.json(sanitizeEvaluationPayload(buildFallbackEvaluation(candidateResponses)));
+      }
+      throw geminiErr;
+    }
+  } catch (err) {
+    console.error('POST /evaluate failed:', err);
+    return res.status(500).json({
+      error: 'Unable to evaluate at the moment. Please try again.'
+    });
+  }
+});
+
+// Serve frontend assets without exposing .env.
+app.get('/', (req, res) => {
+  res.sendFile(path.join(__dirname, 'index.html'));
+});
+app.get('/style.css', (req, res) => {
+  res.sendFile(path.join(__dirname, 'style.css'));
+});
+app.get('/app.js', (req, res) => {
+  res.sendFile(path.join(__dirname, 'app.js'));
+});
+
+app.use((req, res) => {
+  res.status(404).send('Not found');
+});
+
+app.listen(PORT, () => {
+  console.log(`Server listening on http://localhost:${PORT}`);
+});
+
