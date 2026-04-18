@@ -795,6 +795,7 @@
     showProcessingOverlay('Starting the interview...')
     stopSpeaking()
     await speakText(greeting)
+    if (state.phase !== 'interview') return
     hideProcessingOverlay()
   }
 
@@ -827,6 +828,7 @@
 
     // Speak question, then let candidate record.
     await speakText(state.currentCoreQuestion)
+    if (state.phase !== 'interview') return
 
     // Wait for user mic click.
     setInterviewControlsEnabled({
@@ -864,6 +866,7 @@
     setStep(coreStepKeyByIndex(state.coreIndex))
 
     await speakText(followUpQuestion)
+    if (state.phase !== 'interview') return
     setInterviewControlsEnabled({
       micEnabled: true,
       reRecordEnabled: false,
@@ -1277,11 +1280,6 @@
   function onStartInterview() {
     const data = validateWelcome()
     if (!data) return
-    const lockData = readAttemptLock(data.email)
-    if (lockData) {
-      setError(elements.welcomeError, getAttemptLockMessage(lockData))
-      return
-    }
 
     state.candidate = data
     setScreen('policy')
@@ -1293,19 +1291,10 @@
       setError(elements.welcomeError, 'Please enter your details before starting the interview.')
       return
     }
-    const lockData = readAttemptLock(state.candidate.email)
-    if (lockData) {
-      setScreen('welcome')
-      setError(elements.welcomeError, getAttemptLockMessage(lockData))
-      return
-    }
 
     state.disqualified = false
     state.disqualifyReason = ''
     state.interviewStartedAt = new Date().toISOString()
-    markAttemptLock(state.candidate.email, 'started', {
-      startedAt: state.interviewStartedAt
-    })
     state.responses = []
     resetTranscriptUi()
     resetQuestionTimer()
@@ -1434,6 +1423,8 @@
 
     document.addEventListener('visibilitychange', () => {
       if (document.visibilityState === 'hidden') {
+        // Stop TTS immediately when user leaves the tab.
+        stopSpeaking()
         if (shouldIgnoreFocusLoss()) return
         endInterviewAsRejected('You left the interview tab/window during the interview.')
       }
