@@ -1439,10 +1439,9 @@
       }
     })
 
-    window.addEventListener('blur', () => {
-      if (shouldIgnoreFocusLoss()) return
-      endInterviewAsRejected('You moved away from the interview window during the interview.')
-    })
+    // Intentionally do not disqualify on window blur.
+    // Browser UI (extensions, permission UI, omnibox interactions) can trigger blur
+    // even while candidate remains on the same tab.
   }
 
   // Bugfix: fix transcript state variables during reset.
