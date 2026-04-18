@@ -956,6 +956,7 @@
 
         if (nextFollowUpQuestion) {
           await startFollowUpQuestion(nextFollowUpQuestion)
+          if (state.phase !== 'interview') return
           return
         }
       }
@@ -965,6 +966,7 @@
         state.followUpCountForCurrent < MAX_DYNAMIC_FOLLOWUPS
       ) {
         await startFollowUpQuestion(pickMinFollowUpQuestion())
+        if (state.phase !== 'interview') return
         return
       }
 
@@ -973,10 +975,12 @@
 
       const ack = state.followUpCountForCurrent > 0 ? pickClosingAck() : pickWarmAck()
       await speakText(ack)
+      if (state.phase !== 'interview') return
 
       const nextIndex = state.coreIndex + 1
       if (nextIndex < CORE_QUESTIONS.length) {
         await startCoreQuestion(nextIndex)
+        if (state.phase !== 'interview') return
       } else {
         await goToResults()
       }
@@ -1336,9 +1340,11 @@
       }
 
       await speakGreetingAndBegin()
+      if (state.phase !== 'interview') return
 
       // First core question.
       await startCoreQuestion(0)
+      if (state.phase !== 'interview') return
       state.phase = 'interview'
       // Update interval until results.
       const stopWhenResults = setInterval(() => {
