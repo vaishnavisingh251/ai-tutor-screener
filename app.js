@@ -129,6 +129,7 @@
     timerAutoSubmitting: false,
     timerRunning: false,
     ignoreResultsUntilMs: 0,
+    permissionPromptGuardUntilMs: 0,
     disqualified: false,
     disqualifyReason: '',
     committedTranscript: '',
@@ -681,6 +682,15 @@
     } catch {
       // ignore
     }
+  }
+
+  function armPermissionPromptGuard(ms = 5000) {
+    const windowMs = Math.max(0, Number(ms || 0))
+    state.permissionPromptGuardUntilMs = Date.now() + windowMs
+  }
+
+  function shouldIgnoreFocusLoss() {
+    return Date.now() < Number(state.permissionPromptGuardUntilMs || 0)
   }
 
   async function apiCheckAnswer(payload) {
@@ -1380,6 +1390,8 @@
       if (!state.recording) {
         // Candidate starts recording when ready.
         stopSpeaking()
+        // Browser permission prompts can temporarily shift focus; do not disqualify for that.
+        armPermissionPromptGuard(6000)
         startRecording()
       } else {
         setError(
@@ -1422,11 +1434,13 @@
 
     document.addEventListener('visibilitychange', () => {
       if (document.visibilityState === 'hidden') {
+        if (shouldIgnoreFocusLoss()) return
         endInterviewAsRejected('You left the interview tab/window during the interview.')
       }
     })
 
     window.addEventListener('blur', () => {
+      if (shouldIgnoreFocusLoss()) return
       endInterviewAsRejected('You moved away from the interview window during the interview.')
     })
   }
