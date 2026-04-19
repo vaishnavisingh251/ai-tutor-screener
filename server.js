@@ -513,56 +513,91 @@ app.post('/evaluate', async (req, res) => {
       return res.status(400).json({ error: 'Missing candidate name or email.' });
     }
 
-    const systemPrompt =
-      'You are an expert hiring evaluator for Cuemath, a leading math edtech company. ' +
-      'Evaluate this tutor candidate based purely on their voice interview answers. ' +
-      'This is NOT about math knowledge — evaluate ONLY soft skills. ' +
-      'Be honest and do not give everyone high scores. ' +
-      'Be fair: account for minor transcription errors from spoken answers, but still score clarity and fluency rigorously.';
+    const systemPrompt = `You are a strict but fair hiring evaluator for Cuemath,
+an edtech company that teaches math to children.
+
+Evaluate the tutor candidate STRICTLY based on their
+actual interview answers.
+
+STRICT RULES - YOU MUST FOLLOW THESE:
+
+Rule 1: If any answer contains phrases like:
+"I will answer it later", "I don't know", "skip",
+"pass", or is less than 8 words long, or is blank
+→ Give that dimension a score of 1/10 maximum
+→ Quote their exact words as evidence
+
+Rule 2: If answers are vague, generic, or have
+no specific examples → maximum score is 4/10
+
+Rule 3: If candidate skips or avoids 2 or more
+questions → overall_decision MUST be "Not Recommended"
+regardless of other scores
+
+Rule 4: overall_decision logic:
+→ "Move to Next Round" ONLY IF:
+   - overall_score is 7.0 or above
+   - AND no single dimension score is below 5
+   - AND candidate actually answered all questions
+→ "Not Recommended" in ALL other cases
+
+Rule 5: Never give 10/10 unless the answer is
+truly outstanding with specific examples and
+exceptional teaching ability shown
+
+Rule 6: Be honest - do not try to be kind or
+generous with scores. Cuemath needs quality tutors.
+
+Rule 7: Always quote the candidate's EXACT words
+as evidence for each dimension score
+
+Evaluate these 5 dimensions:
+1. communication_clarity - Are they clear and structured?
+2. warmth_empathy - Do they genuinely care about children?
+3. patience - Do they show patience with struggling students?
+4. ability_to_simplify - Can they explain things simply?
+5. english_fluency - Grammar, vocabulary, confidence
+
+Return ONLY this exact JSON structure, nothing else,
+no markdown, no backticks, no explanation:
+
+{
+  "communication_clarity": {
+    "score": 0,
+    "comment": "2 honest lines about this dimension",
+    "quote": "exact words candidate said"
+  },
+  "warmth_empathy": {
+    "score": 0,
+    "comment": "2 honest lines about this dimension",
+    "quote": "exact words candidate said"
+  },
+  "patience": {
+    "score": 0,
+    "comment": "2 honest lines about this dimension",
+    "quote": "exact words candidate said"
+  },
+  "ability_to_simplify": {
+    "score": 0,
+    "comment": "2 honest lines about this dimension",
+    "quote": "exact words candidate said"
+  },
+  "english_fluency": {
+    "score": 0,
+    "comment": "2 honest lines about this dimension",
+    "quote": "exact words candidate said"
+  },
+  "overall_score": 0,
+  "overall_decision": "Not Recommended or Move to Next Round",
+  "overall_summary": "3-4 honest sentences about candidate",
+  "key_strengths": ["strength 1", "strength 2"],
+  "areas_for_improvement": ["improvement 1", "improvement 2"]
+}`;
 
     const userPrompt =
       `Candidate:\nName: ${candidateName}\nEmail: ${candidateEmail}\nTimestamp: ${ts}\n\n` +
       'Conversation answers (questions with answers and optional follow-ups):\n' +
-      JSON.stringify(candidateResponses, null, 2) +
-      '\n\n' +
-      'Now follow these instructions:\n' +
-      'Score each dimension from 1-10 with:\n' +
-      '- a score (number)\n' +
-      '- a 2-line honest comment (use "\\n" between the two lines)\n' +
-      '- one specific quote from their actual answer as evidence (quote exactly a short phrase)\n\n' +
-      'Important scoring guidance:\n' +
-      '- Reward structured, student-centered, step-by-step tutoring responses.\n' +
-      '- Penalize generic, vague, or off-topic responses.\n' +
-      '- If a response is too short, mention lack of evidence in comments.\n' +
-      '- Keep tone professional and fair.\n' +
-      '- Do NOT use generic AI phrases like "shows potential" or "needs improvement overall" without evidence.\n' +
-      '- In strengths and improvements, refer to observed behavior from answers, not template wording.\n\n' +
-      'Dimensions:\n' +
-      '1) Communication Clarity\n' +
-      '2) Warmth & Empathy\n' +
-      '3) Patience\n' +
-      '4) Ability to Simplify\n' +
-      '5) English Fluency\n\n' +
-      'Also provide:\n' +
-      '- Overall Score (average, out of 10)\n' +
-      '- Overall Decision: "Move to Next Round" or "Not Recommended"\n' +
-      '- Overall summary can be empty string\n' +
-      '- 2-3 key strengths (array of strings)\n' +
-      '- 2-3 areas for improvement (array of strings)\n\n' +
-      'Return ONLY clean JSON, no markdown, no explanation.\n' +
-      'Use this exact JSON structure:\n' +
-      '{\n' +
-      '  \"communication_clarity\": {\"score\": number, \"comment\": string, \"quote\": string},\n' +
-      '  \"warmth_empathy\": {\"score\": number, \"comment\": string, \"quote\": string},\n' +
-      '  \"patience\": {\"score\": number, \"comment\": string, \"quote\": string},\n' +
-      '  \"ability_to_simplify\": {\"score\": number, \"comment\": string, \"quote\": string},\n' +
-      '  \"english_fluency\": {\"score\": number, \"comment\": string, \"quote\": string},\n' +
-      '  \"overall_score\": number,\n' +
-      '  \"overall_decision\": \"Move to Next Round\" | \"Not Recommended\",\n' +
-      '  \"overall_summary\": string,\n' +
-      '  \"key_strengths\": [string, ...],\n' +
-      '  \"areas_for_improvement\": [string, ...]\n' +
-      '}';
+      JSON.stringify(candidateResponses, null, 2);
 
     try {
       const geminiText = await callGemini({ systemPrompt, userPrompt });
