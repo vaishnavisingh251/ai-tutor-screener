@@ -1,7 +1,7 @@
 (() => {
   const API_BASE = ''; // same-origin (server exposes /check-answer and /evaluate)
   const QUESTION_TIME_LIMIT_SECONDS = 60
-  const MIN_DYNAMIC_FOLLOWUPS = 2
+  const MIN_DYNAMIC_FOLLOWUPS = 0
   const MAX_DYNAMIC_FOLLOWUPS = 3
 
   // Interview core questions.
@@ -13,18 +13,29 @@
     'Tell me about a time you explained something difficult in a simple way — to anyone, not just students.'
   ];
 
-  // Warm acknowledgement phrases for strong answers (used only when we are NOT asking a follow-up).
-  const WARM_ACKS = [
-    'That is a wonderful perspective, thank you!',
-    'I really like how you think about that!',
-    'That shows great empathy — very important for teaching!',
-    'I appreciate how clearly you explained it!'
+  // Used only when the last answer looks substantive (not evasive / not a one-liner).
+  const SUBSTANTIVE_POSITIVE_ACKS = [
+    'Thank you — that gives a clear picture. Let\'s go to the next question.',
+    'I appreciate the detail there. Here is the next question.',
+    'That helps me understand your approach. Moving on.'
+  ];
+
+  const NEUTRAL_TRANSITION_ACKS = [
+    'Alright — here is the next question.',
+    'Let\'s continue with the next question.',
+    'Thank you. Here is the next part of the interview.'
+  ];
+
+  const HONEST_WEAK_TRANSITION_ACKS = [
+    'Okay — let\'s move on to the next question.',
+    'Understood. Here is the next question.',
+    'Let\'s go to the next question.'
   ];
 
   const FOLLOW_UP_CLOSING_ACKS = [
-    'Thanks for expanding on that — moving on to the next question.',
-    'That helps a lot — let\'s continue.',
-    'Got it. Let\'s move to the next part of the interview.'
+    'Thanks for adding that. Here is the next question.',
+    'Alright — let\'s continue.',
+    'Let\'s move to the next part of the interview.'
   ];
 
   const MIN_FOLLOWUP_FALLBACKS = [
@@ -722,20 +733,65 @@
     return data
   }
 
-  function pickWarmAck() {
-    const pool = WARM_ACKS.filter((a) => a !== state.lastWarmAck)
-    const list = pool.length ? pool : WARM_ACKS
+  function wordCountAnswer(text) {
+    const t = String(text || '').trim()
+    if (!t) return 0
+    return t.split(/\s+/).filter(Boolean).length
+  }
+
+  function hasRefusalLanguageClient(text) {
+    const s = String(text || '').trim()
+    if (!s) return true
+    const lower = s.toLowerCase()
+    const patterns = [
+      /\b(?:i\s*)?(?:don'?t|do\s*not)\s+know\b/,
+      /\bwon'?t\s+answer\b/,
+      /\banswer\s*(?:it\s*)?(?:later|tomorrow)\b/,
+      /\b(?:maybe|perhaps)\s+later\b/,
+      /\bskip\b/,
+      /\bpass(?:\s+this)?\b/,
+      /\bno\s+idea\b/,
+      /\bnot\s+sure\b/,
+      /\bnext\s+question\b/
+    ]
+    return patterns.some((re) => re.test(lower))
+  }
+
+  /**
+   * strong = enough detail for a fair screen; weak = evasive, refusal, or too thin.
+   */
+  function classifyAnswerQuality(text, check) {
+    const wc = wordCountAnswer(text)
+    if (!text || !wc) return 'weak'
+    if (hasRefusalLanguageClient(text)) return 'weak'
+    if (wc < 15) return 'weak'
+    if (check?.reason === 'too_short' || check?.reason === 'refusal_or_evasive') return 'weak'
+    if (check?.isVague && check?.reason !== 'clear') return 'weak'
+    if (wc >= 45 && !check?.isVague) return 'strong'
+    return 'ok'
+  }
+
+  function pickFromPool(pool, lastKey) {
+    const filtered = pool.filter((a) => a !== state[lastKey])
+    const list = filtered.length ? filtered : pool
     const choice = list[Math.floor(Math.random() * list.length)]
-    state.lastWarmAck = choice
+    state[lastKey] = choice
     return choice
   }
 
-  function pickClosingAck() {
-    const pool = FOLLOW_UP_CLOSING_ACKS.filter((a) => a !== state.lastClosingAck)
-    const list = pool.length ? pool : FOLLOW_UP_CLOSING_ACKS
-    const choice = list[Math.floor(Math.random() * list.length)]
-    state.lastClosingAck = choice
-    return choice
+  /**
+   * Do not praise thin or evasive answers — keeps the interview feeling like a real screen.
+   */
+  function pickTransitionAck(text, check, hadFollowUps) {
+    const tier = classifyAnswerQuality(text, check)
+    if (hadFollowUps) {
+      if (tier === 'strong') return pickFromPool(FOLLOW_UP_CLOSING_ACKS, 'lastClosingAck')
+      if (tier === 'ok') return pickFromPool(FOLLOW_UP_CLOSING_ACKS, 'lastClosingAck')
+      return pickFromPool(HONEST_WEAK_TRANSITION_ACKS, 'lastClosingAck')
+    }
+    if (tier === 'strong') return pickFromPool(SUBSTANTIVE_POSITIVE_ACKS, 'lastWarmAck')
+    if (tier === 'ok') return pickFromPool(NEUTRAL_TRANSITION_ACKS, 'lastWarmAck')
+    return pickFromPool(HONEST_WEAK_TRANSITION_ACKS, 'lastWarmAck')
   }
 
   function normalizeQuestionText(text) {
@@ -973,7 +1029,7 @@
       if (!state.responses) state.responses = []
       state.responses.push(state.currentRecord)
 
-      const ack = state.followUpCountForCurrent > 0 ? pickClosingAck() : pickWarmAck()
+      const ack = pickTransitionAck(text, check, state.followUpCountForCurrent > 0)
       await speakText(ack)
       if (state.phase !== 'interview') return
 

@@ -161,11 +161,11 @@ function followUpFromQuestion(question) {
   const q = String(question || '').toLowerCase();
 
   if (q.includes('fraction')) {
-    return 'Nice start. Explain fractions with one simple example and clear steps.';
+    return 'Explain fractions with one simple example and clear steps.';
   }
 
   if (q.includes('staring at the same problem') || q.includes('walk me through') || q.includes('exactly what you would do')) {
-    return 'Good. Give one real moment and what you would say first, then next.';
+    return 'Give one real moment and what you would say first, then next.';
   }
 
   if (q.includes('keep a child engaged') || q.includes('losing interest') || q.includes('distracted')) {
@@ -177,7 +177,7 @@ function followUpFromQuestion(question) {
   }
 
   if (q.includes('tell me a little about yourself')) {
-    return 'Thanks. Share one experience that clearly shows why you enjoy teaching.';
+    return 'Share one experience that clearly shows why you enjoy teaching.';
   }
 
   return 'Could you make this more concrete with one real example and clear steps?';
@@ -219,7 +219,7 @@ function followUpFromContext(coreQuestion, lastAnswer, depth = 1) {
   }
 
   if (/example|real|specific|step|student|child/.test(a)) {
-    if (d === 1) return 'Good. How would you make that even simpler for a child?';
+    if (d === 1) return 'How would you make that even simpler for a child?';
     return 'Add one short real-life example to support that.';
   }
 
@@ -326,49 +326,247 @@ function sanitizeEvaluationPayload(payload) {
   return out;
 }
 
+const DIMENSION_KEYS = [
+  'communication_clarity',
+  'warmth_empathy',
+  'patience',
+  'ability_to_simplify',
+  'english_fluency'
+];
+
+function textsForRecord(r) {
+  const out = [];
+  if (!r || typeof r !== 'object') return out;
+  if (stripToText(r.answer)) out.push(stripToText(r.answer));
+  if (Array.isArray(r.followups)) {
+    for (const f of r.followups) {
+      if (stripToText(f?.answer)) out.push(stripToText(f.answer));
+    }
+  }
+  if (stripToText(r.followup_answer)) out.push(stripToText(r.followup_answer));
+  return out;
+}
+
+function hasRefusalLanguage(text) {
+  const s = String(text || '').trim();
+  if (!s) return false;
+  const lower = s.toLowerCase();
+  const patterns = [
+    /\b(?:i\s*)?(?:don'?t|do\s*not)\s+know\b/,
+    /\bwon'?t\s+answer\b/,
+    /\banswer\s*(?:it\s*)?(?:later|tomorrow)\b/,
+    /\b(?:maybe|perhaps)\s+later\b/,
+    /\bskip\b/,
+    /\bpass(?:\s+this)?\b/,
+    /\bno\s+idea\b/,
+    /\bnot\s+sure\b/,
+    /\bnext\s+question\b/
+  ];
+  return patterns.some((re) => re.test(lower));
+}
+
+function responsesHaveRefusalLanguage(responses) {
+  if (!Array.isArray(responses)) return false;
+  for (const r of responses) {
+    for (const t of textsForRecord(r)) {
+      if (hasRefusalLanguage(t)) return true;
+    }
+  }
+  return false;
+}
+
+function responsesHaveUltraShortSegment(responses) {
+  if (!Array.isArray(responses)) return true;
+  for (const r of responses) {
+    for (const t of textsForRecord(r)) {
+      const s = String(t || '').trim();
+      if (!s) continue;
+      const wc = wordCount(s);
+      if (wc > 0 && wc < 8) return true;
+    }
+  }
+  return false;
+}
+
+function questionWasSkippedOrAvoided(r) {
+  const texts = textsForRecord(r);
+  if (texts.length === 0) return true;
+  return texts.every((t) => {
+    const s = String(t || '').trim();
+    if (!s) return true;
+    if (hasRefusalLanguage(s)) return true;
+    if (wordCount(s) < 8) return true;
+    return false;
+  });
+}
+
+function countSkippedQuestions(responses) {
+  if (!Array.isArray(responses)) return 5;
+  return responses.filter(questionWasSkippedOrAvoided).length;
+}
+
+function responsesLookVagueNoConcreteExamples(responses) {
+  if (!Array.isArray(responses)) return true;
+  return responses.some((r) => {
+    const combined = textsForRecord(r).join(' ').trim();
+    const wc = wordCount(combined);
+    if (wc < 8) return false;
+    const hasConcrete = /\b(example|because|first|then|step|student|child|teach|fraction|calm|listen|minute)\b/i.test(
+      combined
+    );
+    return wc < 40 && !hasConcrete;
+  });
+}
+
+function normalizeDimensionEntry(dim) {
+  if (!dim || typeof dim !== 'object') {
+    return { score: 1, comment: '', quote: '' };
+  }
+  return {
+    score: clampScore(dim.score),
+    comment: String(dim.comment || ''),
+    quote: String(dim.quote || '')
+  };
+}
+
+/**
+ * Reconciles model output with transcript rules so weak or evasive answers
+ * cannot receive inflated scores or a positive decision.
+ */
+function enforceEvaluationConsistency(parsed, responses) {
+  const out = { ...parsed };
+  for (const k of DIMENSION_KEYS) {
+    out[k] = normalizeDimensionEntry(parsed?.[k]);
+  }
+
+  const refusalAny = responsesHaveRefusalLanguage(responses);
+  const ultraShortAny = responsesHaveUltraShortSegment(responses);
+  const vagueAny = responsesLookVagueNoConcreteExamples(responses);
+  const skippedCount = countSkippedQuestions(responses);
+
+  for (const k of DIMENSION_KEYS) {
+    let s = out[k].score;
+    if (refusalAny || ultraShortAny) {
+      s = Math.min(s, 1);
+    } else if (vagueAny) {
+      s = Math.min(s, 4);
+    }
+    out[k] = { ...out[k], score: clampScore(s) };
+  }
+
+  const scores = DIMENSION_KEYS.map((k) => out[k].score);
+  const overallRaw = scores.reduce((a, b) => a + b, 0) / 5;
+  const overall = Math.round(overallRaw * 10) / 10;
+  out.overall_score = overall;
+
+  const minDim = Math.min(...scores);
+  const answeredAllCore = Array.isArray(responses) && responses.length >= 5;
+
+  let decision = 'Not Recommended';
+  if (skippedCount >= 2) {
+    decision = 'Not Recommended';
+  } else if (overall >= 7 && minDim >= 5 && answeredAllCore && skippedCount === 0) {
+    decision = 'Move to Next Round';
+  } else {
+    decision = 'Not Recommended';
+  }
+  out.overall_decision = decision;
+
+  const extra =
+    refusalAny || ultraShortAny
+      ? ' Several replies were too short, evasive, or non-substantive; scores are capped accordingly.'
+      : vagueAny
+        ? ' Several answers lacked concrete teaching examples; scores reflect limited evidence.'
+        : '';
+  if (extra && typeof out.overall_summary === 'string' && !out.overall_summary.includes('capped')) {
+    out.overall_summary = (out.overall_summary + extra).trim();
+  }
+
+  return out;
+}
+
 function buildFallbackEvaluation(responses) {
   const allText = collectAllAnswerText(responses);
   const wc = wordCount(allText);
   const sentences = sentenceCount(allText);
   const evidenceQuote = pickEvidenceQuote(responses);
 
-  // Basic heuristic scoring so UI can render a meaningful report while Gemini is unavailable.
-  const base = clampScore(3 + Math.floor(wc / 45));
-  const clarity = clampScore(base + (sentences >= 8 ? 1 : 0));
-  const warmth = clampScore(base + (/student|child|help|encourage|support|patient/i.test(allText) ? 1 : 0));
+  const refusalAny = responsesHaveRefusalLanguage(responses);
+  const ultraShortAny = responsesHaveUltraShortSegment(responses);
+  const vagueAny = responsesLookVagueNoConcreteExamples(responses);
+  const skippedCount = countSkippedQuestions(responses);
+
+  let base = clampScore(3 + Math.floor(wc / 55));
+  if (refusalAny || ultraShortAny) {
+    base = 1;
+  } else if (vagueAny || skippedCount > 0) {
+    base = Math.min(base, 3);
+  }
+
+  const clarity = clampScore(base + (sentences >= 8 && !ultraShortAny ? 1 : 0));
+  const warmth = clampScore(
+    base + (/student|child|help|encourage|support|patient/i.test(allText) && !refusalAny ? 1 : 0)
+  );
   const patience = clampScore(base + (/calm|step|slow|again|listen|patience/i.test(allText) ? 1 : 0));
   const simplify = clampScore(base + (/example|simple|story|real|pizza|slice/i.test(allText) ? 1 : 0));
-  const fluency = clampScore(base + (wc >= 120 ? 1 : 0));
+  const fluency = clampScore(base + (wc >= 120 && !ultraShortAny ? 1 : 0));
 
   const overall = clampScore((clarity + warmth + patience + simplify + fluency) / 5);
-  const decision = overall >= 7 ? 'Move to Next Round' : 'Not Recommended';
   const strengths = [];
   const improvements = [];
 
-  if (clarity >= 7) strengths.push('Explains ideas with reasonable structure and understandable flow.')
-  if (warmth >= 7) strengths.push('Shows learner-focused language and supportive tone in responses.')
-  if (simplify >= 7) strengths.push('Uses concrete examples to simplify abstract ideas for children.')
-  if (fluency >= 7) strengths.push('Speaks with enough detail and continuity to communicate confidently.')
-  if (strengths.length === 0) strengths.push('Attempted all questions and provided spoken responses for evaluation.')
+  if (refusalAny || ultraShortAny) {
+    improvements.push('Avoid "I don\'t know", skipping, or one-line replies; each answer needs clear teaching content.');
+  }
+  if (skippedCount >= 2) {
+    improvements.push('Multiple questions were not answered with usable detail; practice full answers before screening.');
+  }
+  if (clarity >= 7 && !refusalAny && !ultraShortAny) {
+    strengths.push('Explains ideas with reasonable structure and understandable flow.');
+  }
+  if (warmth >= 7 && !refusalAny) {
+    strengths.push('Shows learner-focused language and supportive tone in responses.');
+  }
+  if (simplify >= 7) {
+    strengths.push('Uses concrete examples to simplify abstract ideas for children.');
+  }
+  if (fluency >= 7 && !ultraShortAny) {
+    strengths.push('Speaks with enough detail and continuity to communicate confidently.');
+  }
+  if (strengths.length === 0) {
+    strengths.push('Completed the interview; evidence is limited for stronger strengths.');
+  }
 
-  if (clarity < 6) improvements.push('Give tighter, step-by-step answers instead of broad statements.')
-  if (simplify < 6) improvements.push('Add child-friendly real-life examples (pizza, sharing, objects) while explaining concepts.')
-  if (patience < 6) improvements.push('Describe exactly how you would support a confused student before reteaching.')
-  if (fluency < 6) improvements.push('Use shorter, clearer sentences and avoid fragmented responses.')
-  if (improvements.length === 0) improvements.push('Add slightly more specific classroom examples to strengthen evidence.')
+  if (clarity < 6) {
+    improvements.push('Give tighter, step-by-step answers instead of broad statements.');
+  }
+  if (simplify < 6) {
+    improvements.push('Add child-friendly real-life examples (pizza, sharing, objects) while explaining concepts.');
+  }
+  if (patience < 6) {
+    improvements.push('Describe exactly how you would support a confused student before reteaching.');
+  }
+  if (fluency < 6) {
+    improvements.push('Use fuller sentences with enough detail to show teaching judgment.');
+  }
+  if (improvements.length === 0) {
+    improvements.push('Add slightly more specific classroom examples to strengthen evidence.');
+  }
 
-  return {
+  const raw = {
     communication_clarity: buildDimension(clarity, 'Communication clarity', evidenceQuote),
     warmth_empathy: buildDimension(warmth, 'Warmth and empathy', evidenceQuote),
     patience: buildDimension(patience, 'Patience', evidenceQuote),
     ability_to_simplify: buildDimension(simplify, 'Ability to simplify', evidenceQuote),
     english_fluency: buildDimension(fluency, 'English fluency', evidenceQuote),
     overall_score: overall,
-    overall_decision: decision,
+    overall_decision: overall >= 7 ? 'Move to Next Round' : 'Not Recommended',
     overall_summary: '',
     key_strengths: strengths.slice(0, 3),
     areas_for_improvement: improvements.slice(0, 3)
   };
+
+  return enforceEvaluationConsistency(raw, responses);
 }
 
 app.post('/check-answer', async (req, res) => {
@@ -378,7 +576,7 @@ app.post('/check-answer', async (req, res) => {
       answer,
       coreQuestion,
       followUpCount = 0,
-      minFollowUps = 2,
+      minFollowUps = 0,
       maxFollowUps = 3
     } = req.body || {};
     const answerText = String(answer || '').trim();
@@ -400,7 +598,18 @@ app.post('/check-answer', async (req, res) => {
       });
     }
 
-    // Hard rule: very short answers should trigger follow-up.
+    // Refusal / evasion — always push for a real teaching answer while depth allows.
+    if (hasRefusalLanguage(answerText) && depth < maxDepth) {
+      return res.json({
+        isVague: true,
+        shouldAskFollowUp: true,
+        reason: 'refusal_or_evasive',
+        followUpQuestion:
+          'I need a real teaching answer for this role. In two or three sentences, what would you actually do or say?'
+      });
+    }
+
+    // Hard rule: short answers should trigger follow-up (aligns with evaluation Rule 1).
     if (wc < 15) {
       return res.json({
         isVague: true,
@@ -422,10 +631,10 @@ app.post('/check-answer', async (req, res) => {
     }
 
     const systemPrompt =
-      'You are a careful interview coach for Cuemath tutor screening. ' +
-      'Decide if the interviewer should ask another follow-up question now. ' +
-      'Conversation must feel natural and human, not robotic. ' +
-      'Return ONLY clean JSON with keys: isVague (boolean), shouldAskFollowUp (boolean), followUpQuestion (string). ' +
+      'You are a Cuemath tutor screener. Decide if another follow-up is needed. ' +
+      'Be strict: generic praise, "I will answer later", "I don\'t know", skipping, or thin answers are NOT acceptable — ask again. ' +
+      'Sound like a calm human interviewer, not a cheerleader. Never label a weak answer as excellent. ' +
+      'Return ONLY JSON: isVague (boolean), shouldAskFollowUp (boolean), followUpQuestion (string). ' +
       'If shouldAskFollowUp is false, followUpQuestion must be empty.';
 
     const userPrompt =
@@ -436,11 +645,11 @@ app.post('/check-answer', async (req, res) => {
       `Minimum follow-ups desired: ${minDepth}\n` +
       `Maximum follow-ups allowed: ${maxDepth}\n\n` +
       'Rules:\n' +
-      '- If depth is below minimum, prefer asking another follow-up unless the answer is already excellent.\n' +
+      '- Prefer another follow-up if the answer lacks concrete teaching behavior, examples, or clear steps.\n' +
+      '- If depth is below minimum, ask another follow-up unless the answer is clearly strong and specific.\n' +
       '- Never exceed maximum follow-ups.\n' +
-      '- Follow-up should be short, simple English, and conversational.\n' +
-      '- Keep follow-up question under 18 words.\n' +
-      '- Ask for real examples, exact wording, or clear steps when helpful.\n\n' +
+      '- Follow-up: short, plain English, conversational, under 18 words.\n' +
+      '- Ask for one real example, exact wording, or the first thing they would say to a child.\n\n' +
       'Return JSON only.';
 
     try {
@@ -608,7 +817,8 @@ no markdown, no backticks, no explanation:
       }
 
       const parsed = JSON.parse(jsonCandidate);
-      return res.json(sanitizeEvaluationPayload(parsed));
+      const enforced = enforceEvaluationConsistency(parsed, candidateResponses);
+      return res.json(sanitizeEvaluationPayload(enforced));
     } catch (geminiErr) {
       if (isGeminiQuotaError(geminiErr)) {
         console.warn('Gemini evaluate fallback: quota exhausted, using local scoring.');
