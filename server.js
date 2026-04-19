@@ -180,50 +180,157 @@ function askedQuestionSet(askedList) {
   return set;
 }
 
-/** Pick first candidate whose normalized form is not already asked; otherwise last resort + suffix. */
-function pickUnusedFollowUp(candidates, askedSet, rotateOffset = 0) {
+/** Easy, on-topic extras for each main interview question (short, friendly wording). */
+const EASY_TOPIC_INTRO = [
+  'In a few words, what kind of teacher do you hope to be?',
+  'What age group or subject do you most want to help with?',
+  'Was there a simple moment that made you think, “I want to teach”?',
+  'If a parent asked why you tutor, what would you say in one line?',
+  'What do you enjoy most about helping someone learn something new?',
+  'Have you helped a friend or sibling learn — what was it, in brief?',
+  'What would you like a child to feel after a class with you?',
+  'What draws you to helping children learn, even in plain language?'
+];
+
+const EASY_TOPIC_FRACTION = [
+  'Could you use pizza, chocolate, or sharing food to show what “half” means?',
+  'In kid-friendly words, what does the bottom number tell us in a fraction?',
+  'Can you give one fraction example with something you can cut or share?',
+  'How would you check if a 9-year-old really “sees” the fraction, not just the rule?',
+  'What tiny mistake do kids often make with fractions that you would watch for?',
+  'If the child said “I don’t get it,” what picture or story would you try next?',
+  'Can you name “one third” using a real object around a table?',
+  'What is the simplest way to say what a numerator is for a child?'
+];
+
+const EASY_TOPIC_FRUSTRATED = [
+  'What is the first calm sentence you would say to them?',
+  'Would you read the problem together or let them point to where it feels stuck?',
+  'Could you show a tinier version of the same idea on paper to lower stress?',
+  'Would you ask which step feels hard — first, middle, or end?',
+  'What would you do if they looked close to tears — still keep teaching?',
+  'Would you pause ten seconds before you explain — why or why not?',
+  'How would you sit or stand so they feel you are on their side?',
+  'What one easier warm-up sum might you try before the hard one?'
+];
+
+const EASY_TOPIC_ENGAGEMENT = [
+  'What quick game or two-minute change might bring the spark back?',
+  'Would you switch to a tiny win first, then return to the hard part?',
+  'How would you praise effort before you ask for more focus?',
+  'Could you link the lesson to a cartoon, sport, or hobby they like?',
+  'What short stretch or movement could you allow without wasting the whole class?',
+  'How would you sound cheerful without being fake when they drift?',
+  'What simple choice could you offer — “this way or that way” — to pull them in?',
+  'What would you avoid saying so they do not feel blamed for drifting?'
+];
+
+const EASY_TOPIC_STORY = [
+  'Can you tell that story in three short sentences?',
+  'Who were you helping — just the role, like friend, cousin, or coworker?',
+  'What was the tricky part before you made it simple?',
+  'How could you tell they finally understood?',
+  'What one rule or picture helped them get unstuck?',
+  'If you told the story again, what would you do sooner?',
+  'How was it still “teaching” even if it was not a formal class?',
+  'What is one tip you would give a new tutor copying your idea?'
+];
+
+const EASY_TOPIC_DEFAULT = [
+  'Can you tie your answer more tightly to the question we just asked?',
+  'What is one simple example that matches this exact prompt?',
+  'Could you shorten your answer and keep only what fits the question?',
+  'In plain words, what is your main reply to what we asked?',
+  'What would you add if you had only twenty seconds more?',
+  'Can you give one clear sentence first, then one more if needed?'
+];
+
+/** Tiny universal soft prompts if topic banks are exhausted (still easy). */
+const EASY_UNIVERSAL_LAST_RESORT = [
+  'Can you add one small, simple example to that?',
+  'What is the easiest way to say your main point in plain words?',
+  'Could you give just step one, then pause?',
+  'In two short sentences, what should we remember?',
+  'What would a child repeat back after listening to you?',
+  'Which part of your answer matters most — can you zoom in on that?',
+  'Can you restate that without any jargon?',
+  'What is one detail you would add if you had ten more seconds?'
+];
+
+function getTopicEasyExtendedPool(coreQuestion) {
+  const q = String(coreQuestion || '').toLowerCase();
+  if (q.includes('tell me a little about yourself') || q.includes('draws you to teaching')) {
+    return EASY_TOPIC_INTRO;
+  }
+  if (q.includes('fraction')) {
+    return EASY_TOPIC_FRACTION;
+  }
+  if (
+    q.includes('staring at the same problem') ||
+    q.includes('walk me through') ||
+    q.includes("don't get it") ||
+    q.includes('exactly what you would do')
+  ) {
+    return EASY_TOPIC_FRUSTRATED;
+  }
+  if (q.includes('keep a child engaged') || q.includes('losing interest') || q.includes('distracted')) {
+    return EASY_TOPIC_ENGAGEMENT;
+  }
+  if (q.includes('time you explained') || q.includes('simple way')) {
+    return EASY_TOPIC_STORY;
+  }
+  return EASY_TOPIC_DEFAULT;
+}
+
+/** Pick first unused line from primary list, then topic-easy pool, then tiny universal pool. */
+function pickUnusedFollowUp(candidates, askedSet, rotateOffset = 0, coreQuestion = '') {
   const list = Array.isArray(candidates) ? candidates.map((x) => String(x || '').trim()).filter(Boolean) : [];
-  if (list.length === 0) return '';
   const asked = askedSet instanceof Set ? askedSet : askedQuestionSet(askedSet);
   const start = Math.max(0, Number(rotateOffset) || 0);
-  for (let i = 0; i < list.length; i++) {
-    const c = list[(start + i) % list.length];
-    if (!asked.has(normalizeQuestionDedupe(c))) return c;
+  const topicEasy = getTopicEasyExtendedPool(coreQuestion);
+
+  for (const pool of [list, topicEasy, EASY_UNIVERSAL_LAST_RESORT]) {
+    if (pool.length === 0) continue;
+    for (let i = 0; i < pool.length; i++) {
+      const c = pool[(start + i) % pool.length];
+      if (!asked.has(normalizeQuestionDedupe(c))) return c;
+    }
   }
-  const last = list[start % list.length];
-  return `${last} Please phrase it differently from your earlier replies.`;
+  return '';
 }
 
 const REFUSAL_FOLLOWUP_VARIANTS = [
-  'Share a concrete teaching moment: what would you say to the child in two short sentences?',
-  'Walk me through what you would actually do in a class — first step, then what comes next?',
-  'Give one real example of how you would help here, including the exact words you would use.',
-  'In plain terms, what is the next action you would take with the student?',
-  'What is one specific thing you would do or say if you were tutoring them today?',
-  'Describe a real situation and what you would do first, without skipping steps.'
+  'Could you try again with one short, simple example for this question?',
+  'In plain words, what would you do next — just the next step?',
+  'Can you give one real moment that fits what we asked, in two sentences?',
+  'What is one thing you would say out loud to the child here?',
+  'Take a breath — then answer with one clear example, not a list of ideas.',
+  'If you were beside the learner today, what would you do first?',
+  'Can you make your answer smaller: one situation, one action?',
+  'What would help us see you teach — not just what you believe about teaching?'
 ];
 
 const TANGENT_FOLLOWUP_VARIANTS = [
-  'Stay on this exact situation only: what are your first two steps?',
-  'Answer more directly in two or three clear steps for this case.',
-  'Focus only on this question — what would you do first, and then what?',
-  'Bring it back to this scenario: what do you say and do in order?'
+  'Let’s stay on this question only — what are two simple steps you would take?',
+  'Can you answer this one in a shorter, straighter way?',
+  'Please skip the extra story — what would you actually do here?',
+  'Bring it back: what is your answer to the situation we described?',
+  'In two or three lines, what is your response to this exact prompt?'
 ];
 
 const GENERIC_TEACHING_FOLLOWUPS = [
-  'If a parent watched your class for one minute, what would they see you do for this learner?',
-  'What object, sketch, or everyday prop could you use to make this idea click for a child?',
-  'How would you tell in under half a minute whether your explanation is actually working?',
-  'What is a common trap tutors fall into on this kind of question, and how do you sidestep it?',
-  'Describe the tone you aim for when someone is stuck — and how you keep them willing to try again.',
-  'How do you split this into the smallest step they can succeed on before you add more?',
-  'What signal tells you to slow down and repeat versus move to a new example?',
-  'Give one fresh angle on your answer — not the same phrasing as before.'
+  'Can you give one short example that fits what we asked?',
+  'What is the simplest way to restate your idea for a child?',
+  'Could you break your answer into a tiny “first, then next”?',
+  'What one picture or object would you use to explain it?',
+  'How would you know your explanation worked — one quick check?',
+  'What would you add if the learner still looked unsure?'
 ];
 
 function buildContextFollowUpPool(coreQuestion, lastAnswer, depth) {
   const d = Math.max(1, Number(depth) || 1);
   const pool = [];
+  pool.push(...getTopicEasyExtendedPool(coreQuestion));
   for (let delta = 0; delta < 4; delta++) {
     pool.push(followUpFromContext(coreQuestion, lastAnswer, Math.min(3, d + delta)));
   }
@@ -245,33 +352,33 @@ function buildContextFollowUpPool(coreQuestion, lastAnswer, depth) {
 function pickDistinctContextFollowUp(coreQuestion, lastAnswer, followUpCount, askedSet) {
   const nextDepth = Math.max(1, Number(followUpCount || 0) + 1);
   const pool = buildContextFollowUpPool(coreQuestion, lastAnswer, nextDepth);
-  return pickUnusedFollowUp(pool, askedSet, followUpCount);
+  return pickUnusedFollowUp(pool, askedSet, followUpCount, coreQuestion);
 }
 
 function followUpFromQuestion(question) {
   const q = String(question || '').toLowerCase();
 
   if (q.includes('fraction')) {
-    return 'Explain fractions with one simple example and clear steps.';
+    return 'Can you show fractions using something you eat or share, in simple words?';
   }
 
   if (q.includes('staring at the same problem') || q.includes('walk me through') || q.includes('exactly what you would do')) {
-    return 'Give one real moment and what you would say first, then next.';
+    return 'Walk me through one calm thing you would do first, then what comes next.';
   }
 
   if (q.includes('keep a child engaged') || q.includes('losing interest') || q.includes('distracted')) {
-    return 'Share one case where a child lost focus and the exact steps you used.';
+    return 'Share one time a child drifted — what did you do that helped?';
   }
 
   if (q.includes('time you explained') || q.includes('simple way')) {
-    return 'Give one real example: what was hard and what exact words you used.';
+    return 'Tell one story: what was hard, and how you made it simple?';
   }
 
   if (q.includes('tell me a little about yourself')) {
-    return 'Share one experience that clearly shows why you enjoy teaching.';
+    return 'What is one experience that shows why you like teaching?';
   }
 
-  return 'Could you make this more concrete with one real example and clear steps?';
+  return 'Could you answer with one short example that fits this question?';
 }
 
 function followUpFromContext(coreQuestion, lastAnswer, depth = 1) {
@@ -280,43 +387,43 @@ function followUpFromContext(coreQuestion, lastAnswer, depth = 1) {
   const d = Math.max(1, Number(depth || 1));
 
   if (q.includes('fraction')) {
-    if (d === 1) return 'In one line, how would you explain fractions to a 9-year-old?';
-    if (d === 2) return 'Now give one real example and the words you would use.';
-    return 'If the child is still confused, what would you say next?';
+    if (d === 1) return 'How would you explain a fraction to a 9-year-old in one simple line?';
+    if (d === 2) return 'Can you give one everyday example, like food or sharing?';
+    return 'If they still look lost, what would you try next — still simple?';
   }
 
   if (q.includes('staring at the same problem') || q.includes('walk me through') || q.includes('exactly what you would do')) {
-    if (d === 1) return 'How would you open so the student feels safe to try again before you reteach?';
-    if (d === 2) return 'After that, what are your next two steps?';
-    return 'How would you check real understanding, not just a yes?';
+    if (d === 1) return 'What is the first calm thing you would say to them?';
+    if (d === 2) return 'What would you do right after that — still in plain steps?';
+    return 'How would you check they understand before you move on?';
   }
 
   if (q.includes('keep a child engaged') || q.includes('losing interest') || q.includes('distracted')) {
-    if (d === 1) return 'What do you do in the first 30 seconds to regain attention?';
-    if (d === 2) return 'Give one activity or tactic you would use right away.';
-    return 'If that fails, what is your backup plan?';
+    if (d === 1) return 'What is one quick thing you try when focus drops?';
+    if (d === 2) return 'What fun or small change might bring them back in?';
+    return 'If that did not work, what would you try next — still gentle?';
   }
 
   if (q.includes('time you explained') || q.includes('simple way')) {
-    if (d === 1) return 'What exact words did you use?';
-    if (d === 2) return 'How did you confirm they truly understood?';
-    return 'What would you do even better next time?';
+    if (d === 1) return 'What was the hard part, and how did you make it easy?';
+    if (d === 2) return 'How could you tell they understood?';
+    return 'What would you do better if you told the story again?';
   }
 
   if (q.includes('tell me a little about yourself')) {
-    if (d === 1) return 'What one experience shaped your motivation to teach?';
-    if (d === 2) return 'What did that teach you about how children learn?';
-    return 'How does that shape your teaching today?';
+    if (d === 1) return 'What is one moment that shows why you want to teach?';
+    if (d === 2) return 'What did you learn about kids from that moment?';
+    return 'How does that show up in how you teach today?';
   }
 
   if (/example|real|specific|step|student|child/.test(a)) {
-    if (d === 1) return 'How would you make that even simpler for a child?';
-    return 'Add one short real-life example to support that.';
+    if (d === 1) return 'Can you say that in even simpler words for a child?';
+    return 'Can you add one short real-life detail to that?';
   }
 
-  if (d === 1) return 'Can you explain that with one real teaching example?';
-  if (d === 2) return 'How would you rephrase your explanation if they still looked lost?';
-  return 'How would you adapt if the student still struggled?';
+  if (d === 1) return 'Can you give one short example that fits this question?';
+  if (d === 2) return 'What would you say next if they still looked unsure?';
+  return 'What would you change if they were still stuck?';
 }
 
 function stripToText(v) {
@@ -693,7 +800,7 @@ app.post('/check-answer', async (req, res) => {
 
     // Refusal / evasion — rotate prompts; never repeat an already-asked follow-up line.
     if (hasRefusalLanguage(answerText) && depth < maxDepth) {
-      const follow = pickUnusedFollowUp(REFUSAL_FOLLOWUP_VARIANTS, askedSet, depth);
+      const follow = pickUnusedFollowUp(REFUSAL_FOLLOWUP_VARIANTS, askedSet, depth, coreQuestionText);
       return res.json({
         isVague: true,
         shouldAskFollowUp: true,
@@ -718,7 +825,7 @@ app.post('/check-answer', async (req, res) => {
         isVague: true,
         shouldAskFollowUp: true,
         reason: 'off_topic_tangent',
-        followUpQuestion: pickUnusedFollowUp(TANGENT_FOLLOWUP_VARIANTS, askedSet, depth)
+        followUpQuestion: pickUnusedFollowUp(TANGENT_FOLLOWUP_VARIANTS, askedSet, depth, coreQuestionText)
       });
     }
 
@@ -748,8 +855,9 @@ app.post('/check-answer', async (req, res) => {
       '- Prefer another follow-up if the answer lacks concrete teaching behavior, examples, or clear steps.\n' +
       '- If depth is below minimum, ask another follow-up unless the answer is clearly strong and specific.\n' +
       '- Never exceed maximum follow-ups.\n' +
-      '- Follow-up: short, plain English, conversational, under 18 words.\n' +
-      '- Ask for one real example, a concrete teaching move, or how they would adapt their explanation.\n' +
+      '- Follow-up must stay on the SAME topic as the core question — do not change the scenario.\n' +
+      '- Use simple, friendly wording (easy for a nervous candidate), under 22 words.\n' +
+      '- Ask for one small example, one clear step, or one plain-language clarification — not a hard exam question.\n' +
       '- Your new followUpQuestion must be genuinely new — not the same as any line listed above.\n\n' +
       'Return JSON only.';
 

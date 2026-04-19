@@ -39,12 +39,16 @@
   ];
 
   const MIN_FOLLOWUP_FALLBACKS = [
-    'Can you give one real example and your exact steps?',
-    'Pick one student moment and walk me through what you would do before and after they respond.',
-    'Please make it concrete with one case and a simple step-by-step answer.',
-    'What would you point to on paper or screen to make the idea land for them?',
-    'Break it into two clear steps — step one, then step two.',
-    'Name one real situation and what you would do differently from a textbook answer.'
+    'Can you give one short example that fits this question?',
+    'What is the simplest way to answer what we asked — in plain words?',
+    'Could you try again with just step one, then step two?',
+    'Can you use one everyday example a child would understand?',
+    'What is the main point we should take away — in two short sentences?',
+    'If you picture yourself with the learner, what do you do first?',
+    'Can you make your answer smaller: one moment, one action?',
+    'What would you say out loud to them — not what you believe in general?',
+    'Could you connect your answer more tightly to this exact question?',
+    'What is one detail that would help us see you teach in this situation?'
   ];
 
   const ATTEMPT_LOCK_PREFIX = 'cuemath_interview_attempt_v1:'
