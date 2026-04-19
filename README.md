@@ -14,8 +14,7 @@ This project is a warm, natural voice interview app that interviews tutor candid
 ## Setup
 
 1. Install Node.js (v18+ recommended)
-2. Open this folder in a terminal:
-   - `C:\Users\singh\OneDrive\Documents\Brain`
+2. Open this folder in a terminal (the project root, e.g. `ai-tutor-screener`).
 3. Install dependencies:
    - `npm install`
 4. Add your Gemini key:

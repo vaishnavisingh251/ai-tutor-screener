@@ -41,7 +41,10 @@
   const MIN_FOLLOWUP_FALLBACKS = [
     'Can you give one real example and your exact steps?',
     'Pick one student moment and tell me what you would say first, then next.',
-    'Please make it concrete with one case and a simple step-by-step answer.'
+    'Please make it concrete with one case and a simple step-by-step answer.',
+    'What is the very first thing you would say out loud to the student?',
+    'Break it into two clear steps — step one, then step two.',
+    'Name one real situation and what you would do differently from a textbook answer.'
   ];
 
   const ATTEMPT_LOCK_PREFIX = 'cuemath_interview_attempt_v1:'
@@ -297,9 +300,12 @@
     setDonut(0)
     setDecisionBadge('Not Recommended')
     if (elements.overallSummary) {
-      elements.overallSummary.textContent =
+      const msg =
         `Interview auto-submitted and rejected. Reason: ${state.disqualifyReason} ` +
         'Please stay on the interview screen for the full session.'
+      elements.overallSummary.textContent = msg
+      elements.overallSummary.classList.remove('is-hidden')
+      elements.overallSummary.setAttribute('aria-hidden', 'false')
     }
 
     const li = document.createElement('li')
@@ -808,6 +814,12 @@
     return String(followups[followups.length - 1]?.question || '').trim()
   }
 
+  function getAskedFollowUpQuestionsForApi() {
+    const followups = state.currentRecord?.followups
+    if (!Array.isArray(followups)) return []
+    return followups.map((f) => String(f?.question || '').trim()).filter(Boolean)
+  }
+
   function pickMinFollowUpQuestion() {
     const used = new Set(
       (state.currentRecord?.followups || [])
@@ -817,7 +829,7 @@
     for (const candidate of MIN_FOLLOWUP_FALLBACKS) {
       if (!used.has(normalizeQuestionText(candidate))) return candidate
     }
-    return MIN_FOLLOWUP_FALLBACKS[0]
+    return MIN_FOLLOWUP_FALLBACKS[state.followUpCountForCurrent % MIN_FOLLOWUP_FALLBACKS.length]
   }
 
   function cleanFeedbackItem(text) {
@@ -984,7 +996,8 @@
         answer: text,
         followUpCount: state.followUpCountForCurrent,
         minFollowUps: MIN_DYNAMIC_FOLLOWUPS,
-        maxFollowUps: MAX_DYNAMIC_FOLLOWUPS
+        maxFollowUps: MAX_DYNAMIC_FOLLOWUPS,
+        askedFollowUpQuestions: getAskedFollowUpQuestionsForApi()
       })
       state.lastCheck = check
 
@@ -1000,7 +1013,14 @@
           nextFollowUpQuestion = pickMinFollowUpQuestion()
         }
 
-        const normalizedNext = normalizeQuestionText(nextFollowUpQuestion)
+        const askedNorm = new Set(
+          getAskedFollowUpQuestionsForApi().map((q) => normalizeQuestionText(q)).filter(Boolean)
+        )
+        let normalizedNext = normalizeQuestionText(nextFollowUpQuestion)
+        if (normalizedNext && askedNorm.has(normalizedNext)) {
+          nextFollowUpQuestion = pickMinFollowUpQuestion()
+          normalizedNext = normalizeQuestionText(nextFollowUpQuestion)
+        }
         const normalizedLast = normalizeQuestionText(getLastFollowUpQuestion())
         if (
           normalizedNext &&
@@ -1029,17 +1049,25 @@
       if (!state.responses) state.responses = []
       state.responses.push(state.currentRecord)
 
+      const nextIndex = state.coreIndex + 1
+      const finishedAllCore = nextIndex >= CORE_QUESTIONS.length
+
+      if (finishedAllCore) {
+        const name = state.candidate.name || 'there'
+        await speakText(
+          `Thank you, ${name}. You have answered all of our questions — that completes this interview.`
+        )
+        if (state.phase !== 'interview') return
+        await goToResults()
+        return
+      }
+
       const ack = pickTransitionAck(text, check, state.followUpCountForCurrent > 0)
       await speakText(ack)
       if (state.phase !== 'interview') return
 
-      const nextIndex = state.coreIndex + 1
-      if (nextIndex < CORE_QUESTIONS.length) {
-        await startCoreQuestion(nextIndex)
-        if (state.phase !== 'interview') return
-      } else {
-        await goToResults()
-      }
+      await startCoreQuestion(nextIndex)
+      if (state.phase !== 'interview') return
     } catch (err) {
       console.error(err)
       hideProcessingOverlay()
@@ -1074,7 +1102,11 @@
     elements.dimensionList.innerHTML = ''
     elements.keyStrengths.innerHTML = ''
     elements.areasForImprovement.innerHTML = ''
-    if (elements.overallSummary) elements.overallSummary.textContent = ''
+    if (elements.overallSummary) {
+      elements.overallSummary.textContent = ''
+      elements.overallSummary.classList.add('is-hidden')
+      elements.overallSummary.setAttribute('aria-hidden', 'true')
+    }
 
     const payload = {
       name: state.candidate.name,
@@ -1102,7 +1134,7 @@
     }, 1500)
 
     try {
-      await speakText(`Thank you ${state.candidate.name}! Your responses have been submitted.`)
+      await speakText('One moment while we prepare your evaluation report.')
       const result = await apiEvaluate(payload)
 
       clearInterval(interval)
@@ -1221,7 +1253,12 @@
 
     const overallScore = Number(result?.overall_score ?? 0)
     const overallDecision = result?.overall_decision
-    if (elements.overallSummary) elements.overallSummary.textContent = String(result?.overall_summary || '')
+    if (elements.overallSummary) {
+      const summary = String(result?.overall_summary || '').trim()
+      elements.overallSummary.textContent = summary
+      elements.overallSummary.classList.toggle('is-hidden', !summary)
+      elements.overallSummary.setAttribute('aria-hidden', summary ? 'false' : 'true')
+    }
     elements.keyStrengths.innerHTML = ''
     elements.areasForImprovement.innerHTML = ''
 
@@ -1317,7 +1354,11 @@
     elements.dimensionList.innerHTML = ''
     elements.keyStrengths.innerHTML = ''
     elements.areasForImprovement.innerHTML = ''
-    if (elements.overallSummary) elements.overallSummary.textContent = ''
+    if (elements.overallSummary) {
+      elements.overallSummary.textContent = ''
+      elements.overallSummary.classList.add('is-hidden')
+      elements.overallSummary.setAttribute('aria-hidden', 'true')
+    }
 
     setScreen('welcome')
   }

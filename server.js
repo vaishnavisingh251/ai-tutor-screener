@@ -157,6 +157,94 @@ function looksLikeLongTangent(question, answer) {
   return overlapRatio(question, answer) < 0.16;
 }
 
+function normalizeQuestionDedupe(text) {
+  return String(text || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function parseAskedFollowUpQuestions(body) {
+  const raw = body?.askedFollowUpQuestions;
+  if (!Array.isArray(raw)) return [];
+  return raw.map((x) => String(x || '').trim()).filter(Boolean);
+}
+
+function askedQuestionSet(askedList) {
+  const set = new Set();
+  for (const s of askedList || []) {
+    const n = normalizeQuestionDedupe(s);
+    if (n) set.add(n);
+  }
+  return set;
+}
+
+/** Pick first candidate whose normalized form is not already asked; otherwise last resort + suffix. */
+function pickUnusedFollowUp(candidates, askedSet, rotateOffset = 0) {
+  const list = Array.isArray(candidates) ? candidates.map((x) => String(x || '').trim()).filter(Boolean) : [];
+  if (list.length === 0) return '';
+  const asked = askedSet instanceof Set ? askedSet : askedQuestionSet(askedSet);
+  const start = Math.max(0, Number(rotateOffset) || 0);
+  for (let i = 0; i < list.length; i++) {
+    const c = list[(start + i) % list.length];
+    if (!asked.has(normalizeQuestionDedupe(c))) return c;
+  }
+  const last = list[start % list.length];
+  return `${last} Please phrase it differently from your earlier replies.`;
+}
+
+const REFUSAL_FOLLOWUP_VARIANTS = [
+  'Share a concrete teaching moment: what would you say to the child in two short sentences?',
+  'Walk me through what you would actually do in a class — first step, then what comes next?',
+  'Give one real example of how you would help here, including the exact words you would use.',
+  'In plain terms, what is the next action you would take with the student?',
+  'What is one specific thing you would do or say if you were tutoring them today?',
+  'Describe a real situation and what you would do first, without skipping steps.'
+];
+
+const TANGENT_FOLLOWUP_VARIANTS = [
+  'Stay on this exact situation only: what are your first two steps?',
+  'Answer more directly in two or three clear steps for this case.',
+  'Focus only on this question — what would you do first, and then what?',
+  'Bring it back to this scenario: what do you say and do in order?'
+];
+
+const GENERIC_TEACHING_FOLLOWUPS = [
+  'What is the first sentence you would say to the student in that moment?',
+  'Give one brief real example from teaching or tutoring, with clear steps.',
+  'How would you simplify your answer for a 9-year-old listening to you?',
+  'What would you check or ask next to see if they truly understood?',
+  'Name one habit you use to keep explanations clear and kind.'
+];
+
+function buildContextFollowUpPool(coreQuestion, lastAnswer, depth) {
+  const d = Math.max(1, Number(depth) || 1);
+  const pool = [];
+  for (let delta = 0; delta < 4; delta++) {
+    pool.push(followUpFromContext(coreQuestion, lastAnswer, Math.min(3, d + delta)));
+  }
+  pool.push(followUpFromQuestion(coreQuestion));
+  pool.push(...GENERIC_TEACHING_FOLLOWUPS);
+  const seen = new Set();
+  const out = [];
+  for (const s of pool) {
+    const t = String(s || '').trim();
+    if (!t) continue;
+    const n = normalizeQuestionDedupe(t);
+    if (seen.has(n)) continue;
+    seen.add(n);
+    out.push(t);
+  }
+  return out;
+}
+
+function pickDistinctContextFollowUp(coreQuestion, lastAnswer, followUpCount, askedSet) {
+  const nextDepth = Math.max(1, Number(followUpCount || 0) + 1);
+  const pool = buildContextFollowUpPool(coreQuestion, lastAnswer, nextDepth);
+  return pickUnusedFollowUp(pool, askedSet, followUpCount);
+}
+
 function followUpFromQuestion(question) {
   const q = String(question || '').toLowerCase();
 
@@ -585,6 +673,8 @@ app.post('/check-answer', async (req, res) => {
     const depth = Math.max(0, Number(followUpCount || 0));
     const minDepth = Math.max(0, Number(minFollowUps || 0));
     const maxDepth = Math.max(minDepth, Number(maxFollowUps || 3));
+    const askedFollowUpQuestions = parseAskedFollowUpQuestions(req.body);
+    const askedSet = askedQuestionSet(askedFollowUpQuestions);
 
     const wc = wordCount(answerText);
     const isTangent = looksLikeLongTangent(questionText, answerText);
@@ -598,14 +688,14 @@ app.post('/check-answer', async (req, res) => {
       });
     }
 
-    // Refusal / evasion — always push for a real teaching answer while depth allows.
+    // Refusal / evasion — rotate prompts; never repeat an already-asked follow-up line.
     if (hasRefusalLanguage(answerText) && depth < maxDepth) {
+      const follow = pickUnusedFollowUp(REFUSAL_FOLLOWUP_VARIANTS, askedSet, depth);
       return res.json({
         isVague: true,
         shouldAskFollowUp: true,
         reason: 'refusal_or_evasive',
-        followUpQuestion:
-          'I need a real teaching answer for this role. In two or three sentences, what would you actually do or say?'
+        followUpQuestion: follow
       });
     }
 
@@ -615,7 +705,7 @@ app.post('/check-answer', async (req, res) => {
         isVague: true,
         shouldAskFollowUp: true,
         reason: 'too_short',
-        followUpQuestion: followUpFromContext(coreQuestionText, answerText, depth + 1)
+        followUpQuestion: pickDistinctContextFollowUp(coreQuestionText, answerText, depth, askedSet)
       });
     }
 
@@ -625,8 +715,7 @@ app.post('/check-answer', async (req, res) => {
         isVague: true,
         shouldAskFollowUp: true,
         reason: 'off_topic_tangent',
-        followUpQuestion:
-          'Thank you. Could you answer this more directly in 2-4 clear steps focused only on this exact situation?'
+        followUpQuestion: pickUnusedFollowUp(TANGENT_FOLLOWUP_VARIANTS, askedSet, depth)
       });
     }
 
@@ -637,10 +726,18 @@ app.post('/check-answer', async (req, res) => {
       'Return ONLY JSON: isVague (boolean), shouldAskFollowUp (boolean), followUpQuestion (string). ' +
       'If shouldAskFollowUp is false, followUpQuestion must be empty.';
 
+    const askedBlock =
+      askedFollowUpQuestions.length > 0
+        ? `Already asked follow-ups (do NOT repeat these):\n${askedFollowUpQuestions
+            .map((q, i) => `${i + 1}. ${q}`)
+            .join('\n')}\n\n`
+        : '';
+
     const userPrompt =
       `Core question:\n${coreQuestionText}\n\n` +
       `Current asked question:\n${questionText}\n\n` +
       `Candidate answer:\n${answerText}\n\n` +
+      askedBlock +
       `Current follow-up depth: ${depth}\n` +
       `Minimum follow-ups desired: ${minDepth}\n` +
       `Maximum follow-ups allowed: ${maxDepth}\n\n` +
@@ -649,7 +746,8 @@ app.post('/check-answer', async (req, res) => {
       '- If depth is below minimum, ask another follow-up unless the answer is clearly strong and specific.\n' +
       '- Never exceed maximum follow-ups.\n' +
       '- Follow-up: short, plain English, conversational, under 18 words.\n' +
-      '- Ask for one real example, exact wording, or the first thing they would say to a child.\n\n' +
+      '- Ask for one real example, exact wording, or the first thing they would say to a child.\n' +
+      '- Your new followUpQuestion must be different in wording from every line in "Already asked follow-ups".\n\n' +
       'Return JSON only.';
 
     try {
@@ -660,24 +758,28 @@ app.post('/check-answer', async (req, res) => {
           isVague: true,
           shouldAskFollowUp: true,
           reason: 'fallback_followup',
-          followUpQuestion: followUpFromContext(coreQuestionText, answerText, depth + 1)
+          followUpQuestion: pickDistinctContextFollowUp(coreQuestionText, answerText, depth, askedSet)
         });
       }
 
       const parsed = JSON.parse(jsonCandidate);
       const isVague = Boolean(parsed?.isVague);
       let shouldAskFollowUp = Boolean(parsed?.shouldAskFollowUp);
-      const followUpQuestion = String(parsed?.followUpQuestion || '').trim();
+      let followUpQuestion = String(parsed?.followUpQuestion || '').trim();
 
       if (depth < minDepth) shouldAskFollowUp = true;
       if (depth >= maxDepth) shouldAskFollowUp = false;
+
+      if (shouldAskFollowUp && followUpQuestion && askedSet.has(normalizeQuestionDedupe(followUpQuestion))) {
+        followUpQuestion = pickDistinctContextFollowUp(coreQuestionText, answerText, depth, askedSet);
+      }
 
       if (shouldAskFollowUp && !followUpQuestion) {
         return res.json({
           isVague: true,
           shouldAskFollowUp: true,
           reason: 'fallback_followup',
-          followUpQuestion: followUpFromContext(coreQuestionText, answerText, depth + 1)
+          followUpQuestion: pickDistinctContextFollowUp(coreQuestionText, answerText, depth, askedSet)
         });
       }
 
@@ -697,9 +799,10 @@ app.post('/check-answer', async (req, res) => {
         isVague: true,
         shouldAskFollowUp: depth < maxDepth,
         reason: 'fallback_followup',
-        followUpQuestion: depth < maxDepth
-          ? followUpFromContext(coreQuestionText, answerText, depth + 1)
-          : ''
+        followUpQuestion:
+          depth < maxDepth
+            ? pickDistinctContextFollowUp(coreQuestionText, answerText, depth, askedSet)
+            : ''
       });
     }
   } catch (err) {
