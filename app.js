@@ -40,9 +40,9 @@
 
   const MIN_FOLLOWUP_FALLBACKS = [
     'Can you give one real example and your exact steps?',
-    'Pick one student moment and tell me what you would say first, then next.',
+    'Pick one student moment and walk me through what you would do before and after they respond.',
     'Please make it concrete with one case and a simple step-by-step answer.',
-    'What is the very first thing you would say out loud to the student?',
+    'What would you point to on paper or screen to make the idea land for them?',
     'Break it into two clear steps — step one, then step two.',
     'Name one real situation and what you would do differently from a textbook answer.'
   ];
@@ -814,16 +814,32 @@
     return String(followups[followups.length - 1]?.question || '').trim()
   }
 
+  /** Every follow-up question already used in this interview (all main questions), for deduplication. */
   function getAskedFollowUpQuestionsForApi() {
-    const followups = state.currentRecord?.followups
-    if (!Array.isArray(followups)) return []
-    return followups.map((f) => String(f?.question || '').trim()).filter(Boolean)
+    const out = []
+    if (Array.isArray(state.responses)) {
+      for (const r of state.responses) {
+        if (Array.isArray(r?.followups)) {
+          for (const f of r.followups) {
+            const q = String(f?.question || '').trim()
+            if (q) out.push(q)
+          }
+        }
+      }
+    }
+    if (Array.isArray(state.currentRecord?.followups)) {
+      for (const f of state.currentRecord.followups) {
+        const q = String(f?.question || '').trim()
+        if (q) out.push(q)
+      }
+    }
+    return out
   }
 
   function pickMinFollowUpQuestion() {
     const used = new Set(
-      (state.currentRecord?.followups || [])
-        .map((f) => normalizeQuestionText(f?.question))
+      getAskedFollowUpQuestionsForApi()
+        .map((q) => normalizeQuestionText(q))
         .filter(Boolean)
     )
     for (const candidate of MIN_FOLLOWUP_FALLBACKS) {

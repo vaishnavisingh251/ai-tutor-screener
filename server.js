@@ -211,11 +211,14 @@ const TANGENT_FOLLOWUP_VARIANTS = [
 ];
 
 const GENERIC_TEACHING_FOLLOWUPS = [
-  'What is the first sentence you would say to the student in that moment?',
-  'Give one brief real example from teaching or tutoring, with clear steps.',
-  'How would you simplify your answer for a 9-year-old listening to you?',
-  'What would you check or ask next to see if they truly understood?',
-  'Name one habit you use to keep explanations clear and kind.'
+  'If a parent watched your class for one minute, what would they see you do for this learner?',
+  'What object, sketch, or everyday prop could you use to make this idea click for a child?',
+  'How would you tell in under half a minute whether your explanation is actually working?',
+  'What is a common trap tutors fall into on this kind of question, and how do you sidestep it?',
+  'Describe the tone you aim for when someone is stuck — and how you keep them willing to try again.',
+  'How do you split this into the smallest step they can succeed on before you add more?',
+  'What signal tells you to slow down and repeat versus move to a new example?',
+  'Give one fresh angle on your answer — not the same phrasing as before.'
 ];
 
 function buildContextFollowUpPool(coreQuestion, lastAnswer, depth) {
@@ -283,7 +286,7 @@ function followUpFromContext(coreQuestion, lastAnswer, depth = 1) {
   }
 
   if (q.includes('staring at the same problem') || q.includes('walk me through') || q.includes('exactly what you would do')) {
-    if (d === 1) return 'What is your first sentence to calm the student?';
+    if (d === 1) return 'How would you open so the student feels safe to try again before you reteach?';
     if (d === 2) return 'After that, what are your next two steps?';
     return 'How would you check real understanding, not just a yes?';
   }
@@ -312,7 +315,7 @@ function followUpFromContext(coreQuestion, lastAnswer, depth = 1) {
   }
 
   if (d === 1) return 'Can you explain that with one real teaching example?';
-  if (d === 2) return 'What exact words would you use with the student?';
+  if (d === 2) return 'How would you rephrase your explanation if they still looked lost?';
   return 'How would you adapt if the student still struggled?';
 }
 
@@ -728,7 +731,7 @@ app.post('/check-answer', async (req, res) => {
 
     const askedBlock =
       askedFollowUpQuestions.length > 0
-        ? `Already asked follow-ups (do NOT repeat these):\n${askedFollowUpQuestions
+        ? `Follow-ups already used in this interview — do NOT repeat or lightly rephrase any of these:\n${askedFollowUpQuestions
             .map((q, i) => `${i + 1}. ${q}`)
             .join('\n')}\n\n`
         : '';
@@ -746,8 +749,8 @@ app.post('/check-answer', async (req, res) => {
       '- If depth is below minimum, ask another follow-up unless the answer is clearly strong and specific.\n' +
       '- Never exceed maximum follow-ups.\n' +
       '- Follow-up: short, plain English, conversational, under 18 words.\n' +
-      '- Ask for one real example, exact wording, or the first thing they would say to a child.\n' +
-      '- Your new followUpQuestion must be different in wording from every line in "Already asked follow-ups".\n\n' +
+      '- Ask for one real example, a concrete teaching move, or how they would adapt their explanation.\n' +
+      '- Your new followUpQuestion must be genuinely new — not the same as any line listed above.\n\n' +
       'Return JSON only.';
 
     try {
